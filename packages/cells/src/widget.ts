@@ -726,6 +726,11 @@ export namespace Cell {
     maxNumberOutputs?: number;
 
     /**
+     * Whether to split stdin line history by kernel session or keep globally accessible.
+     */
+    inputHistoryScope?: 'global' | 'session';
+
+    /**
      * Whether this cell is a placeholder for future rendering.
      */
     placeholder?: boolean;
@@ -986,7 +991,8 @@ export class CodeCell extends Cell<ICodeCellModel> {
       contentFactory: contentFactory,
       maxNumberOutputs: this.maxNumberOutputs,
       translator: this.translator,
-      promptOverlay: true
+      promptOverlay: true,
+      inputHistoryScope: options.inputHistoryScope
     }));
     output.addClass(CELL_OUTPUT_AREA_CLASS);
     output.toggleScrolling.connect(() => {
@@ -1198,7 +1204,7 @@ export class CodeCell extends Cell<ICodeCellModel> {
       } else {
         this.model.deleteMetadata('collapsed');
       }
-    });
+    }, false);
   }
 
   /**
@@ -1437,7 +1443,7 @@ export namespace CodeCell {
     if (!code.trim() || !sessionContext.session?.kernel) {
       model.sharedModel.transact(() => {
         model.clearExecution();
-      });
+      }, false);
       return;
     }
     const cellId = { cellId: model.sharedModel.getId() };
@@ -1450,7 +1456,7 @@ export namespace CodeCell {
     model.sharedModel.transact(() => {
       model.clearExecution();
       cell.outputHidden = false;
-    });
+    }, false);
     cell.setPrompt('*');
     model.trusted = true;
     let future:
