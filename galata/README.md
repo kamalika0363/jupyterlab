@@ -76,7 +76,7 @@ Then start the server with:
 jupyter lab --config jupyter_server_test_config.py
 ```
 
-> If you need to customize the set up for galata, you can look at the [`configure_jupyter_server`](https://github.com/jupyterlab/jupyterlab/tree/master/jupyterlab/galata/__init__.py) definition.
+> If you need to customize the set up for galata, you can look at the [`configure_jupyter_server`](https://github.com/jupyterlab/jupyterlab/tree/main/jupyterlab/galata/__init__.py) definition.
 
 ### Run test project
 
@@ -126,14 +126,21 @@ To debug tests, a good way is to use the inspector tool of playwright:
 
 ```
 jupyter lab --config jupyter_server_test_config.py &
-PWDEBUG=1 jlpm playwright test
+jlpm playwright test --debug
+```
+
+Or the [UI mode](https://playwright.dev/docs/test-ui-mode):
+
+```
+jupyter lab --config jupyter_server_test_config.py &
+jlpm playwright test --ui
 ```
 
 ### Dealing with login
 
 If you have set up a custom login handler for your Jupyter application and don't want to remove it
 for your integration tests, you can try the following configuration (inspired by the
-[Playwright documentation](https://playwright.dev/docs/test-advanced#global-setup-and-teardown)):
+[Playwright documentation](https://playwright.dev/docs/test-global-setup-teardown)):
 
 1. Create a file named `global-setup.ts` at the root of the test folder containing the login steps:
 
@@ -518,7 +525,7 @@ test('should return the active terminals', async ({ page, terminals }) => {
 
 - type: \< string >
 
-Unique test temporary path created on the server.
+Unique test temporary path created on the server. Required if uploading files in `beforeAll()` as otherwise the files would not be accessible from consecutive tests because by default `tmpPath` has a random component added for each test.
 
 Note: if you override this string, you will need to take care of creating the
 folder and cleaning it.
@@ -615,7 +622,7 @@ By default, both projects will be executed when running `jlpm run test`. But you
 
 ## Configuration
 
-Galata can be configured by using [command line arguments](https://playwright.dev/docs/cli) or using [`playwright.config.js` file](https://playwright.dev/docs/test-configuration). Full list of config options can be accessed using `jlpm playwright test --help`.
+Galata can be configured by using [command line arguments](https://playwright.dev/docs/test-cli#reference) or using [`playwright.config.js` file](https://playwright.dev/docs/test-configuration). Full list of config options can be accessed using `jlpm playwright test --help`.
 
 ### Custom benchmark report
 

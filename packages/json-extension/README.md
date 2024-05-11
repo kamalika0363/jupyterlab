@@ -2,8 +2,6 @@
 
 A JupyterLab extension for rendering JSON as a tree
 
-![demo](http://g.recordit.co/mqve0QPqyM.gif)
-
 This extension is in the official JupyterLab distribution.
 
 ## Usage
@@ -40,4 +38,4 @@ To render a `.json` file, simply open it:
 
 ## Development
 
-See the [JupyterLab Contributor Documentation](https://github.com/jupyterlab/jupyterlab/blob/master/CONTRIBUTING.md).
+See the [JupyterLab Contributor Documentation](https://github.com/jupyterlab/jupyterlab/blob/main/CONTRIBUTING.md).

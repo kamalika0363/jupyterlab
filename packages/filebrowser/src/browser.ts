@@ -2,6 +2,7 @@
 // Distributed under the terms of the Modified BSD License.
 
 import { showErrorMessage } from '@jupyterlab/apputils';
+import { PathExt } from '@jupyterlab/coreutils';
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import { Contents, ServerConnection } from '@jupyterlab/services';
 import { ITranslator, nullTranslator } from '@jupyterlab/translation';
@@ -62,8 +63,6 @@ export class FileBrowser extends SidePanel {
     model.connectionFailure.connect(this._onConnectionFailure, this);
     this._manager = model.manager;
 
-    // a11y
-    this.toolbar.node.setAttribute('role', 'navigation');
     this.toolbar.node.setAttribute(
       'aria-label',
       this._trans.__('file browser')
@@ -127,6 +126,17 @@ export class FileBrowser extends SidePanel {
   }
 
   /**
+   * Whether to show the full path in the breadcrumbs
+   */
+  get showFullPath(): boolean {
+    return this.crumbs.fullPath;
+  }
+
+  set showFullPath(value: boolean) {
+    this.crumbs.fullPath = value;
+  }
+
+  /**
    * Whether to show the file size column
    */
   get showFileSizeColumn(): boolean {
@@ -167,6 +177,22 @@ export class FileBrowser extends SidePanel {
       this._showFileCheckboxes = value;
     } else {
       console.warn('Listing does not support toggling column visibility');
+    }
+  }
+
+  /**
+   * Whether to sort notebooks above other files
+   */
+  get sortNotebooksFirst(): boolean {
+    return this._sortNotebooksFirst;
+  }
+
+  set sortNotebooksFirst(value: boolean) {
+    if (this.listing.setNotebooksFirstSorting) {
+      this.listing.setNotebooksFirstSorting(value);
+      this._sortNotebooksFirst = value;
+    } else {
+      console.warn('Listing does not support sorting notebooks first');
     }
   }
 
@@ -227,6 +253,11 @@ export class FileBrowser extends SidePanel {
   private async _createNew(
     options: Contents.ICreateOptions
   ): Promise<Contents.IModel> {
+    // normalize the path if the file is created from a custom drive
+    if (options.path) {
+      const localPath = this._manager.services.contents.localPath(options.path);
+      options.path = this._toDrivePath(this.model.driveName, localPath);
+    }
     try {
       const model = await this._manager.newUntitled(options);
       await this.listing.selectItemByName(model.name, true);
@@ -378,6 +409,23 @@ export class FileBrowser extends SidePanel {
     }
   }
 
+  /**
+   * Given a drive name and a local path, return the full
+   * drive path which includes the drive name and the local path.
+   *
+   * @param driveName the name of the drive
+   * @param localPath the local path on the drive.
+   *
+   * @returns the full drive path
+   */
+  private _toDrivePath(driveName: string, localPath: string): string {
+    if (driveName === '') {
+      return localPath;
+    } else {
+      return `${driveName}:${PathExt.removeSlash(localPath)}`;
+    }
+  }
+
   protected listing: DirListing;
   protected crumbs: BreadCrumbs;
   protected mainPanel: Panel;
@@ -390,6 +438,7 @@ export class FileBrowser extends SidePanel {
   private _showFileSizeColumn: boolean = false;
   private _showHiddenFiles: boolean = false;
   private _showFileCheckboxes: boolean = false;
+  private _sortNotebooksFirst: boolean = false;
 }
 
 /**

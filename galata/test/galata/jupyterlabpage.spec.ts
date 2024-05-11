@@ -34,7 +34,7 @@ test('should reload the application page and load hook', async ({ page }) => {
 test('should reset the UI', async ({ page }) => {
   await page.resetUI();
   expect(await page.menu.isAnyOpen()).toEqual(false);
-  expect(await page.waitForSelector(page.launcherSelector)).toBeTruthy();
+  await expect(page.launcher).toBeVisible();
   expect(await page.kernel.isAnyRunning()).toEqual(false);
   expect(await page.statusbar.isVisible()).toEqual(true);
   expect(await page.sidebar.isTabOpen('filebrowser')).toEqual(true);
@@ -64,7 +64,7 @@ test.describe('listeners', () => {
     });
 
     await page.menu.clickMenuItem('File>New>Text File');
-    await page.waitForSelector(`[role="main"] >> text=${DEFAULT_NAME}`);
+    await page.locator(`[role="main"] >> text=${DEFAULT_NAME}`).waitFor();
 
     await Promise.all([
       page.locator('.jp-Dialog').waitFor(),
@@ -86,7 +86,7 @@ test.describe('listeners', () => {
     });
 
     await page.menu.clickMenuItem('File>New>Text File');
-    await page.waitForSelector(`[role="main"] >> text=${DEFAULT_NAME}`);
+    await page.locator(`[role="main"] >> text=${DEFAULT_NAME}`).waitFor();
 
     await Promise.all([
       page.locator('.jp-Dialog').waitFor(),
@@ -114,7 +114,7 @@ test.describe('listeners', () => {
     });
 
     await page.menu.clickMenuItem('File>New>Text File');
-    await page.waitForSelector(`[role="main"] >> text=${DEFAULT_NAME}`);
+    await page.locator(`[role="main"] >> text=${DEFAULT_NAME}`).waitFor();
 
     await Promise.all([
       page.locator('.jp-Dialog').waitFor(),

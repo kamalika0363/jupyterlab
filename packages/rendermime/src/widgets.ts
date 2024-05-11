@@ -76,20 +76,27 @@ export abstract class RenderedCommon
    *
    * @param model - The mime model to render.
    *
+   * @param keepExisting - Whether to keep the existing rendering.
+   *
    * @returns A promise which resolves when rendering is complete.
    *
    * #### Notes
-   * If the DOM node for this widget already has content, it is emptied
-   * before rendering. Subclasses that do not want this behavior
-   * (if, for instance, they are using DOM diffing), should override
-   * this method and not call `super.renderModel()`.
+   * By default, if the DOM node for this widget already has content, it
+   * is emptied before rendering. Subclasses that do not want this behavior
+   * (if, for instance, they are using DOM diffing), should override this
+   * method or call `super.renderModel(model, true)`.
    */
-  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+  async renderModel(
+    model: IRenderMime.IMimeModel,
+    keepExisting?: boolean
+  ): Promise<void> {
     // TODO compare model against old model for early bail?
 
     // Empty any existing content in the node from previous renders
-    while (this.node.firstChild) {
-      this.node.removeChild(this.node.firstChild);
+    if (!keepExisting) {
+      while (this.node.firstChild) {
+        this.node.removeChild(this.node.firstChild);
+      }
     }
 
     // Toggle the trusted class on the widget.
@@ -177,7 +184,7 @@ export class RenderedHTML extends RenderedHTMLCommon {
    * @returns A promise which resolves when rendering is complete.
    */
   render(model: IRenderMime.IMimeModel): Promise<void> {
-    return renderers.renderHTML({
+    return (this._rendered = renderers.renderHTML({
       host: this.node,
       source: String(model.data[this.mimeType]),
       trusted: model.trusted,
@@ -187,17 +194,24 @@ export class RenderedHTML extends RenderedHTMLCommon {
       shouldTypeset: this.isAttached,
       latexTypesetter: this.latexTypesetter,
       translator: this.translator
-    });
+    }));
   }
 
   /**
    * A message handler invoked on an `'after-attach'` message.
    */
   onAfterAttach(msg: Message): void {
-    if (this.latexTypesetter) {
-      this.latexTypesetter.typeset(this.node);
-    }
+    this._rendered
+      .then(() => {
+        if (this.latexTypesetter) {
+          this.latexTypesetter.typeset(this.node);
+        }
+      })
+      .catch(console.warn);
   }
+
+  // A promise which resolves when most recent rendering is complete.
+  private _rendered: Promise<void> = Promise.resolve();
 }
 
 /**
@@ -222,22 +236,29 @@ export class RenderedLatex extends RenderedCommon {
    * @returns A promise which resolves when rendering is complete.
    */
   render(model: IRenderMime.IMimeModel): Promise<void> {
-    return renderers.renderLatex({
+    return (this._rendered = renderers.renderLatex({
       host: this.node,
       source: String(model.data[this.mimeType]),
       shouldTypeset: this.isAttached,
       latexTypesetter: this.latexTypesetter
-    });
+    }));
   }
 
   /**
    * A message handler invoked on an `'after-attach'` message.
    */
   onAfterAttach(msg: Message): void {
-    if (this.latexTypesetter) {
-      this.latexTypesetter.typeset(this.node);
-    }
+    this._rendered
+      .then(() => {
+        if (this.latexTypesetter) {
+          this.latexTypesetter.typeset(this.node);
+        }
+      })
+      .catch(console.warn);
   }
+
+  // A promise which resolves when most recent rendering is complete.
+  private _rendered: Promise<void> = Promise.resolve();
 }
 
 /**
@@ -299,7 +320,7 @@ export class RenderedMarkdown extends RenderedHTMLCommon {
    * @returns A promise which resolves when rendering is complete.
    */
   render(model: IRenderMime.IMimeModel): Promise<void> {
-    return renderers.renderMarkdown({
+    return (this._rendered = renderers.renderMarkdown({
       host: this.node,
       source: String(model.data[this.mimeType]),
       trusted: model.trusted,
@@ -310,17 +331,35 @@ export class RenderedMarkdown extends RenderedHTMLCommon {
       latexTypesetter: this.latexTypesetter,
       markdownParser: this.markdownParser,
       translator: this.translator
-    });
+    }));
+  }
+
+  /**
+   * Render a mime model.
+   *
+   * @param model - The mime model to render.
+   *
+   * @returns A promise which resolves when rendering is complete.
+   */
+  async renderModel(model: IRenderMime.IMimeModel): Promise<void> {
+    await super.renderModel(model, true);
   }
 
   /**
    * A message handler invoked on an `'after-attach'` message.
    */
   onAfterAttach(msg: Message): void {
-    if (this.latexTypesetter) {
-      this.latexTypesetter.typeset(this.node);
-    }
+    this._rendered
+      .then(() => {
+        if (this.latexTypesetter) {
+          this.latexTypesetter.typeset(this.node);
+        }
+      })
+      .catch(console.warn);
   }
+
+  // A promise which resolves when most recent rendering is complete.
+  private _rendered: Promise<void> = Promise.resolve();
 }
 
 /**
@@ -348,23 +387,30 @@ export class RenderedSVG extends RenderedCommon {
     const metadata = model.metadata[this.mimeType] as
       | ReadonlyJSONObject
       | undefined;
-    return renderers.renderSVG({
+    return (this._rendered = renderers.renderSVG({
       host: this.node,
       source: String(model.data[this.mimeType]),
       trusted: model.trusted,
       unconfined: metadata && (metadata.unconfined as boolean | undefined),
       translator: this.translator
-    });
+    }));
   }
 
   /**
    * A message handler invoked on an `'after-attach'` message.
    */
   onAfterAttach(msg: Message): void {
-    if (this.latexTypesetter) {
-      this.latexTypesetter.typeset(this.node);
-    }
+    this._rendered
+      .then(() => {
+        if (this.latexTypesetter) {
+          this.latexTypesetter.typeset(this.node);
+        }
+      })
+      .catch(console.warn);
   }
+
+  // A promise which resolves when most recent rendering is complete.
+  private _rendered: Promise<void> = Promise.resolve();
 }
 
 /**
@@ -393,6 +439,24 @@ export class RenderedText extends RenderedCommon {
       host: this.node,
       sanitizer: this.sanitizer,
       source: String(model.data[this.mimeType]),
+      translator: this.translator
+    });
+  }
+}
+
+export class RenderedError extends RenderedCommon {
+  constructor(options: IRenderMime.IRendererOptions) {
+    super(options);
+    this.addClass('jp-RenderedText');
+  }
+
+  render(model: IRenderMime.IMimeModel): Promise<void> {
+    return renderers.renderError({
+      host: this.node,
+      sanitizer: this.sanitizer,
+      source: String(model.data[this.mimeType]),
+      linkHandler: this.linkHandler,
+      resolver: this.resolver,
       translator: this.translator
     });
   }

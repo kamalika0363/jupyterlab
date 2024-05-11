@@ -14,6 +14,7 @@ import { CodeEditor, IPositionModel, LineCol } from '@jupyterlab/codeeditor';
 import { IStatusBar } from '@jupyterlab/statusbar';
 import { ITranslator } from '@jupyterlab/translation';
 import { Widget } from '@lumino/widgets';
+import { commandsPlugin } from './commands';
 import {
   bindingPlugin,
   extensionPlugin,
@@ -27,6 +28,7 @@ import {
  */
 export const lineColItem: JupyterFrontEndPlugin<IPositionModel> = {
   id: '@jupyterlab/codemirror-extension:line-col-status',
+  description: 'Provides the code editor cursor position model.',
   autoStart: true,
   requires: [ITranslator],
   optional: [ILabShell, IStatusBar],
@@ -46,6 +48,7 @@ export const lineColItem: JupyterFrontEndPlugin<IPositionModel> = {
     if (statusBar) {
       // Add the status item to the status bar.
       statusBar.registerStatusItem(lineColItem.id, {
+        priority: 1,
         item,
         align: 'right',
         rank: 2,
@@ -99,6 +102,7 @@ export const lineColItem: JupyterFrontEndPlugin<IPositionModel> = {
  * Export the plugins as default.
  */
 const plugins: JupyterFrontEndPlugin<any>[] = [
+  commandsPlugin,
   languagePlugin,
   themePlugin,
   bindingPlugin,

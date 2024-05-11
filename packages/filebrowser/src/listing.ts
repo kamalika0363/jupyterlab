@@ -209,7 +209,7 @@ export class DirListing extends Widget {
   /**
    * Construct a new file browser directory listing widget.
    *
-   * @param model - The file browser view model.
+   * @param options The constructor options
    */
   constructor(options: DirListing.IOptions) {
     super({
@@ -226,6 +226,9 @@ export class DirListing extends Widget {
     this._editNode.className = EDITOR_CLASS;
     this._manager = this._model.manager;
     this._renderer = options.renderer || DirListing.defaultRenderer;
+
+    // Get the width of the "modified" column
+    this._updateModifiedSize(this.node);
 
     const headerNode = DOMUtils.findElement(this.node, HEADER_CLASS);
     // hide the file size column by default
@@ -323,7 +326,11 @@ export class DirListing extends Widget {
    * Sort the items using a sort condition.
    */
   sort(state: DirListing.ISortState): void {
-    this._sortedItems = Private.sort(this.model.items(), state);
+    this._sortedItems = Private.sort(
+      this.model.items(),
+      state,
+      this._sortNotebooksFirst
+    );
     this._sortState = state;
     this.update();
   }
@@ -643,6 +650,28 @@ export class DirListing extends Widget {
    * @returns A promise that resolves when the name is selected.
    */
   async selectItemByName(name: string, focus: boolean = false): Promise<void> {
+    return this._selectItemByName(name, focus);
+  }
+
+  /**
+   * Select an item by name.
+   *
+   * @param name - The name of the item to select.
+   * @param focus - Whether to move focus to the selected item.
+   * @param force - Whether to proceed with selection even if the file was already selected.
+   *
+   * @returns A promise that resolves when the name is selected.
+   */
+  private async _selectItemByName(
+    name: string,
+    focus: boolean = false,
+    force: boolean = false
+  ): Promise<void> {
+    if (!force && this.isSelected(name)) {
+      // Avoid API polling and DOM updates if already selected
+      return;
+    }
+
     // Make sure the file is available.
     await this.model.refresh();
 
@@ -658,7 +687,6 @@ export class DirListing extends Widget {
     MessageLoop.sendMessage(this, Widget.Msg.UpdateRequest);
     ElementExt.scrollIntoViewIfNeeded(this.contentNode, this._items[index]);
   }
-
   /**
    * Handle the DOM events for the directory listing.
    *
@@ -781,6 +809,100 @@ export class DirListing extends Widget {
     }
   }
 
+  // Update the modified column's size
+  private _updateModifiedSize(node: HTMLElement) {
+    // Look for the modified column's header
+    const modified = DOMUtils.findElement(node, MODIFIED_ID_CLASS);
+    this._modifiedWidth = modified?.getBoundingClientRect().width ?? 83;
+    this._modifiedStyle =
+      this._modifiedWidth < 100
+        ? 'narrow'
+        : this._modifiedWidth > 120
+        ? 'long'
+        : 'short';
+  }
+
+  // Update only the modified dates.
+  protected updateModified(items: Contents.IModel[], nodes: HTMLElement[]) {
+    items.forEach((item, i) => {
+      const node = nodes[i];
+      if (node && item.last_modified) {
+        const modified = DOMUtils.findElement(node, ITEM_MODIFIED_CLASS);
+        if (this.renderer.updateItemModified !== undefined) {
+          this.renderer.updateItemModified(
+            modified,
+            item.last_modified,
+            this._modifiedStyle
+          );
+        } else {
+          DirListing.defaultRenderer.updateItemModified(
+            modified,
+            item.last_modified,
+            this._modifiedStyle
+          );
+        }
+      }
+    });
+  }
+
+  // Update item nodes based on widget state.
+  protected updateNodes(items: Contents.IModel[], nodes: HTMLElement[]) {
+    items.forEach((item, i) => {
+      const node = nodes[i];
+      const ft = this._manager.registry.getFileTypeForModel(item);
+      this.renderer.updateItemNode(
+        node,
+        item,
+        ft,
+        this.translator,
+        this._hiddenColumns,
+        this.selection[item.path],
+        this._modifiedStyle
+      );
+      if (
+        this.selection[item.path] &&
+        this._isCut &&
+        this._model.path === this._prevPath
+      ) {
+        node.classList.add(CUT_CLASS);
+      }
+
+      // add metadata to the node
+      node.setAttribute(
+        'data-isdir',
+        item.type === 'directory' ? 'true' : 'false'
+      );
+    });
+
+    // Handle the selectors on the widget node.
+    const selected = Object.keys(this.selection).length;
+    if (selected) {
+      this.addClass(SELECTED_CLASS);
+      if (selected > 1) {
+        this.addClass(MULTI_SELECTED_CLASS);
+      }
+    }
+
+    // Handle file session statuses.
+    const paths = items.map(item => item.path);
+    for (const session of this._model.sessions()) {
+      const index = ArrayExt.firstIndexOf(paths, session.path);
+      const node = nodes[index];
+      // Node may have been filtered out.
+      if (node) {
+        let name = session.kernel?.name;
+        const specs = this._model.specs;
+
+        node.classList.add(RUNNING_CLASS);
+        if (specs && name) {
+          const spec = specs.kernelspecs[name];
+          name = spec ? spec.display_name : this._trans.__('unknown');
+        }
+        node.title = this._trans.__('%1\nKernel: %2', node.title, name);
+      }
+    }
+  }
+
   /**
    * A handler invoked on an `'update-request'` message.
    */
@@ -854,60 +976,7 @@ export class DirListing extends Widget {
       );
     }
 
-    // Update item nodes based on widget state.
-    items.forEach((item, i) => {
-      const node = nodes[i];
-      const ft = this._manager.registry.getFileTypeForModel(item);
-      renderer.updateItemNode(
-        node,
-        item,
-        ft,
-        this.translator,
-        this._hiddenColumns,
-        this.selection[item.path]
-      );
-      if (
-        this.selection[item.path] &&
-        this._isCut &&
-        this._model.path === this._prevPath
-      ) {
-        node.classList.add(CUT_CLASS);
-      }
-
-      // add metadata to the node
-      node.setAttribute(
-        'data-isdir',
-        item.type === 'directory' ? 'true' : 'false'
-      );
-    });
-
-    // Handle the selectors on the widget node.
-    const selected = Object.keys(this.selection).length;
-    if (selected) {
-      this.addClass(SELECTED_CLASS);
-      if (selected > 1) {
-        this.addClass(MULTI_SELECTED_CLASS);
-      }
-    }
-
-    // Handle file session statuses.
-    const paths = items.map(item => item.path);
-    for (const session of this._model.sessions()) {
-      const index = ArrayExt.firstIndexOf(paths, session.path);
-      const node = nodes[index];
-      // Node may have been filtered out.
-      if (node) {
-        let name = session.kernel?.name;
-        const specs = this._model.specs;
-
-        node.classList.add(RUNNING_CLASS);
-        if (specs && name) {
-          const spec = specs.kernelspecs[name];
-          name = spec ? spec.display_name : this._trans.__('unknown');
-        }
-        node.title = this._trans.__('%1\nKernel: %2', node.title, name);
-      }
-    }
+    this.updateNodes(items, nodes);
 
     this._prevPath = this._model.path;
   }
@@ -916,6 +985,14 @@ export class DirListing extends Widget {
     const { width } =
       msg.width === -1 ? this.node.getBoundingClientRect() : msg;
     this.toggleClass('jp-DirListing-narrow', width < 250);
+
+    // Rerender item nodes' modified dates, if the modified style has changed.
+    const oldModifiedStyle = this._modifiedStyle;
+    // Update both size and style
+    this._updateModifiedSize(this.node);
+    if (oldModifiedStyle !== this._modifiedStyle) {
+      this.updateModified(this._sortedItems, this._items);
+    }
   }
 
   setColumnVisibility(
@@ -934,6 +1011,18 @@ export class DirListing extends Widget {
       this.translator,
       this._hiddenColumns
     );
+  }
+
+  /**
+   * Update the setting to sort notebooks above files.
+   * This sorts the items again if the internal value is modified.
+   */
+  setNotebooksFirstSorting(isEnabled: boolean) {
+    let previousValue = this._sortNotebooksFirst;
+    this._sortNotebooksFirst = isEnabled;
+    if (this._sortNotebooksFirst !== previousValue) {
+      this.sort(this._sortState);
+    }
   }
 
   /**
@@ -1919,7 +2008,7 @@ export class DirListing extends Widget {
       this.selection[item.path]
     ) {
       try {
-        await this.selectItemByName(finalFilename, true);
+        await this._selectItemByName(finalFilename, true, true);
       } catch {
         // do nothing
         console.warn('After rename, failed to select file', finalFilename);
@@ -2054,8 +2143,12 @@ export class DirListing extends Widget {
   private _inRename = false;
   private _isDirty = false;
   private _hiddenColumns = new Set<DirListing.ToggleableColumn>();
+  private _sortNotebooksFirst = false;
   // _focusIndex should never be set outside the range [0, this._items.length - 1]
   private _focusIndex = 0;
+  // Width of the "last modified" column for an individual file
+  private _modifiedWidth: number;
+  private _modifiedStyle: Time.HumanStyle;
 }
 
 /**
@@ -2164,11 +2257,28 @@ export namespace DirListing {
     ): HTMLElement;
 
     /**
+     * Update an item's last modified date.
+     *
+     * @param modified - Element containing the file's last modified date.
+     *
+     * @param modifiedDate - String representation of the last modified date.
+     *
+     * @param modifiedStyle - The date style for the modified column: narrow, short, or long
+     */
+    updateItemModified?(
+      modified: HTMLElement,
+      modifiedDate: string,
+      modifiedStyle: Time.HumanStyle
+    ): void;
+
+    /**
      * Update an item node to reflect the current state of a model.
      *
      * @param node - A node created by [[createItemNode]].
      *
      * @param model - The model object to use for the item state.
+     *
+     * @param modifiedStyle - The date style for the modified column: narrow, short, or long
      *
      * @param fileType - The file type of the item, if applicable.
      */
@@ -2178,7 +2288,8 @@ export namespace DirListing {
       fileType?: DocumentRegistry.IFileType,
       translator?: ITranslator,
       hiddenColumns?: Set<DirListing.ToggleableColumn>,
-      selected?: boolean
+      selected?: boolean,
+      modifiedStyle?: Time.HumanStyle
     ): void;
 
     /**
@@ -2234,6 +2345,8 @@ export namespace DirListing {
       const node = document.createElement('div');
       const header = document.createElement('div');
       const content = document.createElement('ul');
+      // Allow the node to scroll while dragging items.
+      content.setAttribute('data-lm-dragscroll', 'true');
       content.className = CONTENT_CLASS;
       header.className = HEADER_CLASS;
       node.appendChild(header);
@@ -2257,7 +2370,10 @@ export namespace DirListing {
       const trans = translator.load('jupyterlab');
       const name = this.createHeaderItemNode(trans.__('Name'));
       const narrow = document.createElement('div');
-      const modified = this.createHeaderItemNode(trans.__('Last Modified'));
+      const modified = this._createHeaderItemNodeWithSizes({
+        small: trans.__('Modified'),
+        large: trans.__('Last Modified')
+      });
       const fileSize = this.createHeaderItemNode(trans.__('File Size'));
       name.classList.add(NAME_ID_CLASS);
       name.classList.add(SELECTED_CLASS);
@@ -2267,7 +2383,8 @@ export namespace DirListing {
       narrow.textContent = '...';
       if (!hiddenColumns?.has('is_selected')) {
         const checkboxWrapper = this.createCheckboxWrapperNode({
-          alwaysVisible: true
+          alwaysVisible: true,
+          headerNode: true
         });
         node.appendChild(checkboxWrapper);
       }
@@ -2453,6 +2570,7 @@ export namespace DirListing {
      */
     createCheckboxWrapperNode(options?: {
       alwaysVisible: boolean;
+      headerNode?: boolean;
     }): HTMLElement {
       // Wrap the checkbox in a label element in order to increase its hit area.
       const labelWrapper = document.createElement('label');
@@ -2463,9 +2581,11 @@ export namespace DirListing {
       // Prevent the user from clicking (via mouse, keyboard, or touch) the
       // checkbox since other code handles the mouse and keyboard events and
       // controls the checked state of the checkbox.
-      checkbox.addEventListener('click', event => {
-        event.preventDefault();
-      });
+      if (!options?.headerNode) {
+        checkbox.addEventListener('click', event => {
+          event.preventDefault();
+        });
+      }
 
       // The individual file checkboxes are visible on hover, but the header
       // check-all checkbox is always visible.
@@ -2478,6 +2598,32 @@ export namespace DirListing {
 
       labelWrapper.appendChild(checkbox);
       return labelWrapper;
+    }
+
+    /**
+     * Update an item's last modified date.
+     *
+     * @param modified - Element containing the file's last modified date.
+     *
+     * @param modifiedDate - String representation of the last modified date.
+     *
+     * @param modifiedStyle - The date style for the modified column: narrow, short, or long
+     */
+    updateItemModified(
+      modified: HTMLElement,
+      modifiedDate: string,
+      modifiedStyle: Time.HumanStyle
+    ): void {
+      let modText = '';
+      let modTitle = '';
+
+      const parsedDate = new Date(modifiedDate);
+      // Render the date in one of multiple formats, depending on the container's size
+      modText = Time.formatHuman(parsedDate, modifiedStyle);
+      modTitle = Time.format(parsedDate);
+
+      modified.textContent = modText;
+      modified.title = modTitle;
     }
 
     /**
@@ -2496,7 +2642,8 @@ export namespace DirListing {
       fileType?: DocumentRegistry.IFileType,
       translator?: ITranslator,
       hiddenColumns?: Set<DirListing.ToggleableColumn>,
-      selected?: boolean
+      selected?: boolean,
+      modifiedStyle?: Time.HumanStyle
     ): void {
       if (selected) {
         node.classList.add(SELECTED_CLASS);
@@ -2616,14 +2763,13 @@ export namespace DirListing {
         checkbox.checked = selected ?? false;
       }
 
-      let modText = '';
-      let modTitle = '';
       if (model.last_modified) {
-        modText = Time.formatHuman(new Date(model.last_modified));
-        modTitle = Time.format(new Date(model.last_modified));
+        this.updateItemModified(
+          modified,
+          model.last_modified,
+          modifiedStyle ?? 'short'
+        );
       }
-      modified.textContent = modText;
-      modified.title = modTitle;
     }
 
     /**
@@ -2704,6 +2850,29 @@ export namespace DirListing {
       node.appendChild(icon);
       return node;
     }
+
+    /**
+     * Create a node for a header item with multiple sizes.
+     */
+    private _createHeaderItemNodeWithSizes(labels: {
+      [k: string]: string;
+    }): HTMLElement {
+      const node = document.createElement('div');
+      node.className = HEADER_ITEM_CLASS;
+      const icon = document.createElement('span');
+      icon.className = HEADER_ITEM_ICON_CLASS;
+      for (let k of Object.keys(labels)) {
+        const text = document.createElement('span');
+        text.classList.add(
+          HEADER_ITEM_TEXT_CLASS,
+          HEADER_ITEM_TEXT_CLASS + '-' + k
+        );
+        text.textContent = labels[k];
+        node.appendChild(text);
+      }
+      node.appendChild(icon);
+      return node;
+    }
   }
 
   /**
@@ -2770,38 +2939,80 @@ namespace Private {
    */
   export function sort(
     items: Iterable<Contents.IModel>,
-    state: DirListing.ISortState
+    state: DirListing.ISortState,
+    sortNotebooksFirst: boolean = false
   ): Contents.IModel[] {
     const copy = Array.from(items);
     const reverse = state.direction === 'descending' ? 1 : -1;
 
+    /**
+     * Compares two items and returns whether they should have a fixed priority.
+     * The fixed priority enables to always sort the directories above the other files. And to sort the notebook above other files if the `sortNotebooksFirst` is true.
+     */
+    function isPriorityOverridden(a: Contents.IModel, b: Contents.IModel) {
+      if (sortNotebooksFirst) {
+        return a.type !== b.type;
+      }
+      return (a.type === 'directory') !== (b.type === 'directory');
+    }
+
+    /**
+     * Returns the priority of a file.
+     */
+    function getPriority(item: Contents.IModel): number {
+      if (item.type === 'directory') {
+        return 2;
+      }
+      if (item.type === 'notebook' && sortNotebooksFirst) {
+        return 1;
+      }
+      return 0;
+    }
+
+    function compare(
+      compare: (a: Contents.IModel, b: Contents.IModel) => number
+    ) {
+      return (a: Contents.IModel, b: Contents.IModel) => {
+        // Group directory first, then notebooks, then files
+        if (isPriorityOverridden(a, b)) {
+          return getPriority(b) - getPriority(a);
+        }
+
+        const compared = compare(a, b);
+
+        if (compared !== 0) {
+          return compared * reverse;
+        }
+
+        // Default sorting is alphabetical ascending
+        return a.name.localeCompare(b.name);
+      };
+    }
+
     if (state.key === 'last_modified') {
-      // Sort by last modified (grouping directories first)
-      copy.sort((a, b) => {
-        const t1 = a.type === 'directory' ? 0 : 1;
-        const t2 = b.type === 'directory' ? 0 : 1;
-
-        const valA = new Date(a.last_modified).getTime();
-        const valB = new Date(b.last_modified).getTime();
-
-        return t1 - t2 || (valA - valB) * reverse;
-      });
+      // Sort by last modified
+      copy.sort(
+        compare((a: Contents.IModel, b: Contents.IModel) => {
+          return (
+            new Date(a.last_modified).getTime() -
+            new Date(b.last_modified).getTime()
+          );
+        })
+      );
     } else if (state.key === 'file_size') {
-      // Sort by size (grouping directories first)
-      copy.sort((a, b) => {
-        const t1 = a.type === 'directory' ? 0 : 1;
-        const t2 = b.type === 'directory' ? 0 : 1;
-
-        return t1 - t2 || ((a.size ?? 0) - (b.size ?? 0)) * reverse;
-      });
+      // Sort by size
+      copy.sort(
+        compare((a: Contents.IModel, b: Contents.IModel) => {
+          return (a.size ?? 0) - (b.size ?? 0);
+        })
+      );
     } else {
-      // Sort by name (grouping directories first)
-      copy.sort((a, b) => {
-        const t1 = a.type === 'directory' ? 0 : 1;
-        const t2 = b.type === 'directory' ? 0 : 1;
-
-        return t1 - t2 || b.name.localeCompare(a.name) * reverse;
-      });
+      // Sort by name
+      copy.sort(
+        compare((a: Contents.IModel, b: Contents.IModel) => {
+          return b.name.localeCompare(a.name);
+        })
+      );
     }
     return copy;
   }

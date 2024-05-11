@@ -13,6 +13,7 @@ import {
 import {
   CodeEditor,
   CodeViewerWidget,
+  IEditorMimeTypeService,
   IEditorServices
 } from '@jupyterlab/codeeditor';
 import {
@@ -237,7 +238,8 @@ export namespace Commands {
     extensions: IEditorExtensionRegistry,
     languages: IEditorLanguageRegistry,
     consoleTracker: IConsoleTracker | null,
-    sessionDialogs: ISessionContextDialogs
+    sessionDialogs: ISessionContextDialogs,
+    shell: JupyterFrontEnd.IShell
   ): void {
     /**
      * Add a command to change font size for File Editor
@@ -256,11 +258,14 @@ export namespace Commands {
           style.getPropertyValue('--jp-code-font-size'),
           10
         );
+        if (!config.customStyles) {
+          config.customStyles = {};
+        }
         const currentSize =
           (config['customStyles']['fontSize'] ??
             extensions.baseConfiguration['customStyles']['fontSize']) ||
           cssSize;
-        config.fontSize = currentSize + delta;
+        config.customStyles.fontSize = currentSize + delta;
         return settingRegistry
           .set(id, 'editorConfig', config)
           .catch((reason: Error) => {
@@ -567,7 +572,13 @@ export namespace Commands {
         if (name && widget) {
           const spec = languages.findByName(name);
           if (spec) {
-            widget.content.model.mimeType = spec.mime as string;
+            if (Array.isArray(spec.mime)) {
+              widget.content.model.mimeType =
+                (spec.mime[0] as string) ??
+                IEditorMimeTypeService.defaultMimeType;
+            } else {
+              widget.content.model.mimeType = spec.mime as string;
+            }
           }
         }
       },
@@ -839,9 +850,8 @@ export namespace Commands {
         if (!widget) {
           return false;
         }
-        // Ideally enable it when there are undo events stored
-        // Reference issue #8590: Code mirror editor could expose the history of undo/redo events
-        return true;
+
+        return widget.editor.model.sharedModel.canUndo();
       },
       icon: undoIcon.bindprops({ stylesheet: 'menuItem' }),
       label: trans.__('Undo')
@@ -870,9 +880,8 @@ export namespace Commands {
         if (!widget) {
           return false;
         }
-        // Ideally enable it when there are redo events stored
-        // Reference issue #8590: Code mirror editor could expose the history of undo/redo events
-        return true;
+
+        return widget.editor.model.sharedModel.canRedo();
       },
       icon: redoIcon.bindprops({ stylesheet: 'menuItem' }),
       label: trans.__('Redo')
@@ -991,6 +1000,36 @@ export namespace Commands {
       isEnabled: () => Boolean(isEnabled() && tracker.currentWidget?.content),
       label: trans.__('Select All')
     });
+
+    // All commands with isEnabled defined directly or in a semantic commands
+    const commandIds = [
+      CommandIDs.lineNumbers,
+      CommandIDs.currentLineNumbers,
+      CommandIDs.lineWrap,
+      CommandIDs.currentLineWrap,
+      CommandIDs.matchBrackets,
+      CommandIDs.currentMatchBrackets,
+      CommandIDs.find,
+      CommandIDs.goToLine,
+      CommandIDs.changeLanguage,
+      CommandIDs.replaceSelection,
+      CommandIDs.createConsole,
+      CommandIDs.restartConsole,
+      CommandIDs.runCode,
+      CommandIDs.runAllCode,
+      CommandIDs.undo,
+      CommandIDs.redo,
+      CommandIDs.cut,
+      CommandIDs.copy,
+      CommandIDs.paste,
+      CommandIDs.selectAll,
+      CommandIDs.createConsole
+    ];
+    const notify = () => {
+      commandIds.forEach(id => commands.notifyCommandChanged(id));
+    };
+    tracker.currentChanged.connect(notify);
+    shell.currentChanged?.connect(notify);
   }
 
   export function addCompleterCommands(
@@ -1278,7 +1317,7 @@ export namespace Commands {
 
     // Add a code runner to the run menu.
     if (consoleTracker) {
-      addCodeRunnersToRunMenu(menu, consoleTracker);
+      addCodeRunnersToRunMenu(menu, consoleTracker, isEnabled);
     }
   }
 
@@ -1303,24 +1342,26 @@ export namespace Commands {
    */
   export function addCodeRunnersToRunMenu(
     menu: IMainMenu,
-    consoleTracker: IConsoleTracker
+    consoleTracker: IConsoleTracker,
+    isEnabled: () => boolean
   ): void {
-    const isEnabled = (current: IDocumentWidget<FileEditor>) =>
+    const isEnabled_ = (current: IDocumentWidget<FileEditor>) =>
+      isEnabled() &&
       current.context &&
       !!consoleTracker.find(
         widget => widget.sessionContext.session?.path === current.context.path
       );
     menu.runMenu.codeRunners.restart.add({
       id: CommandIDs.restartConsole,
-      isEnabled
+      isEnabled: isEnabled_
     });
     menu.runMenu.codeRunners.run.add({
       id: CommandIDs.runCode,
-      isEnabled
+      isEnabled: isEnabled_
     });
     menu.runMenu.codeRunners.runAll.add({
       id: CommandIDs.runAllCode,
-      isEnabled
+      isEnabled: isEnabled_
     });
   }
 

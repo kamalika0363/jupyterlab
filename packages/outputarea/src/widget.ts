@@ -44,6 +44,8 @@ const OUTPUT_AREA_OUTPUT_CLASS = 'jp-OutputArea-output';
  */
 const OUTPUT_AREA_PROMPT_CLASS = 'jp-OutputArea-prompt';
 
+const OUTPUT_AREA_STDIN_HIDING_CLASS = 'jp-OutputArea-stdin-hiding';
+
 /**
  * The class name added to OutputPrompt.
  */
@@ -75,7 +77,7 @@ const STDIN_PROMPT_CLASS = 'jp-Stdin-prompt';
 const STDIN_INPUT_CLASS = 'jp-Stdin-input';
 
 /**
- * The overlay tha can be clicked to switch between output scrolling modes.
+ * The overlay that can be clicked to switch between output scrolling modes.
  */
 const OUTPUT_PROMPT_OVERLAY = 'jp-OutputArea-promptOverlay';
 
@@ -189,6 +191,15 @@ export class OutputArea extends Widget {
     }
     this._future = value;
 
+    value.done
+      .finally(() => {
+        this._pendingInput = false;
+      })
+      .catch(() => {
+        // No-op, required because `finally` re-raises any rejections,
+        // even if caught on the `done` promise level before.
+      });
+
     this.model.clear();
 
     // Make sure there were no input widgets.
@@ -214,10 +225,19 @@ export class OutputArea extends Widget {
   }
 
   /**
-   * Signal emitted when an output area is requesting an input.
+   * Signal emitted when an output area is requesting an input. The signal
+   * carries the input widget that this class creates in response to the input
+   * request.
    */
-  get inputRequested(): ISignal<OutputArea, void> {
+  get inputRequested(): ISignal<OutputArea, IStdin> {
     return this._inputRequested;
+  }
+
+  /**
+   * A flag indicating if the output area has pending input.
+   */
+  get pendingInput(): boolean {
+    return this._pendingInput;
   }
 
   /**
@@ -310,18 +330,23 @@ export class OutputArea extends Widget {
     return this._toggleScrolling;
   }
 
+  get initialize(): ISignal<OutputArea, void> {
+    return this._initialize;
+  }
+
   /**
    * Add overlay allowing to toggle scrolling.
    */
   private _addPromptOverlay() {
     const overlay = document.createElement('div');
     overlay.className = OUTPUT_PROMPT_OVERLAY;
-    const trans = this._translator.load('jupyterlab');
-    overlay.title = trans.__('Toggle output scrolling');
     overlay.addEventListener('click', () => {
       this._toggleScrolling.emit();
     });
     this.node.appendChild(overlay);
+    requestAnimationFrame(() => {
+      this._initialize.emit();
+    });
   }
 
   /**
@@ -435,6 +460,9 @@ export class OutputArea extends Widget {
     prompt.addClass(OUTPUT_AREA_PROMPT_CLASS);
     panel.addWidget(prompt);
 
+    // Indicate that input is pending
+    this._pendingInput = true;
+
     const input = factory.createStdin({
       parent_header: msg.header,
       prompt: stdinPrompt,
@@ -450,9 +478,10 @@ export class OutputArea extends Widget {
     if (this.model.length >= this.maxNumberOutputs) {
       this.maxNumberOutputs = this.model.length;
     }
-    this.layout.addWidget(panel);
+    this._inputRequested.emit(input);
 
-    this._inputRequested.emit();
+    // Get the input node to ensure focus after updating the model upon user reply.
+    const inputNode = input.node.getElementsByTagName('input')[0];
 
     /**
      * Wait for the stdin to complete, add it to the model (so it persists)
@@ -463,14 +492,40 @@ export class OutputArea extends Widget {
       if (this.model.length >= this.maxNumberOutputs) {
         this.maxNumberOutputs = this.model.length + 1;
       }
+      panel.addClass(OUTPUT_AREA_STDIN_HIDING_CLASS);
       // Use stdin as the stream so it does not get combined with stdout.
+      // Note: because it modifies DOM it may (will) shift focus away from the input node.
       this.model.add({
         output_type: 'stream',
         name: 'stdin',
         text: value + '\n'
       });
-      panel.dispose();
+      // Refocus the input node after it lost focus due to update of the model.
+      inputNode.focus();
+
+      // Indicate that input is no longer pending
+      this._pendingInput = false;
+
+      // Keep the input in view for a little while; this (along refocusing)
+      // ensures that we can avoid the cell editor stealing the focus, and
+      // leading to user inadvertently modifying editor content when executing
+      // consecutive commands in short succession.
+      window.setTimeout(() => {
+        // Tack currently focused element to ensure that it remains on it
+        // after disposal of the panel with the old input
+        // (which modifies DOM and can lead to focus jump).
+        const focusedElement = document.activeElement;
+        // Dispose the old panel with no longer needed input box.
+        panel.dispose();
+        // Refocus the element that was focused before.
+        if (focusedElement && focusedElement instanceof HTMLElement) {
+          focusedElement.focus();
+        }
+      }, 500);
     });
+
+    // Note: the `input.value` promise must be listened to before we attach the panel
+    this.layout.addWidget(panel);
   }
 
   /**
@@ -482,7 +537,9 @@ export class OutputArea extends Widget {
     }
     const panel = this.layout.widgets[index] as Panel;
     const renderer = (
-      panel.widgets ? panel.widgets[1] : panel
+      panel.widgets
+        ? panel.widgets.filter(it => 'renderModel' in it).pop()
+        : panel
     ) as IRenderMime.IRenderer;
     // Check whether it is safe to reuse renderer:
     // - Preferred mime type has not changed
@@ -625,7 +682,6 @@ export class OutputArea extends Widget {
     const transient = ((msg.content as any).transient || {}) as JSONObject;
     const displayId = transient['display_id'] as string;
     let targets: number[] | undefined;
-
     switch (msgType) {
       case 'execute_result':
       case 'display_data':
@@ -648,6 +704,15 @@ export class OutputArea extends Widget {
           }
         }
         break;
+      case 'status': {
+        const executionState = (msg as KernelMessage.IStatusMsg).content
+          .execution_state;
+        if (executionState === 'idle') {
+          // If status is idle, the kernel is no longer blocked by the input
+          this._pendingInput = false;
+        }
+        break;
+      }
       default:
         break;
     }
@@ -699,7 +764,6 @@ export class OutputArea extends Widget {
     executionCount: number | null = null
   ): Panel {
     const panel = new Private.OutputPanel();
-
     panel.addClass(OUTPUT_AREA_ITEM_CLASS);
 
     const prompt = this.contentFactory.createOutputPrompt();
@@ -723,13 +787,15 @@ export class OutputArea extends Widget {
    */
   private _maxNumberOutputs: number;
   private _minHeightTimeout: number | null = null;
-  private _inputRequested = new Signal<OutputArea, void>(this);
+  private _inputRequested = new Signal<OutputArea, IStdin>(this);
   private _toggleScrolling = new Signal<OutputArea, void>(this);
+  private _initialize = new Signal<OutputArea, void>(this);
   private _outputTracker = new WidgetTracker<Widget>({
     namespace: UUID.uuid4()
   });
   private _translator: ITranslator;
   private _inputHistoryScope: 'global' | 'session' = 'global';
+  private _pendingInput: boolean = false;
 }
 
 export class SimplifiedOutputArea extends OutputArea {
@@ -748,10 +814,17 @@ export class SimplifiedOutputArea extends OutputArea {
    */
   protected createOutputItem(model: IOutputModel): Widget | null {
     const output = this.createRenderedMimetype(model);
-    if (output) {
-      output.addClass(OUTPUT_AREA_OUTPUT_CLASS);
+
+    if (!output) {
+      return null;
     }
-    return output;
+
+    const panel = new Private.OutputPanel();
+    panel.addClass(OUTPUT_AREA_ITEM_CLASS);
+
+    output.addClass(OUTPUT_AREA_OUTPUT_CLASS);
+    panel.addWidget(output);
+    return panel;
   }
 }
 
@@ -1051,9 +1124,13 @@ export class Stdin extends Widget implements IStdin {
 
     this._input = this.node.getElementsByTagName('input')[0];
     // make users aware of the line history feature
-    this._input.placeholder = this._trans.__(
-      '↑↓ for history. Search history with c-↑/c-↓'
-    );
+    if (!this._password) {
+      this._input.placeholder = this._trans.__(
+        '↑↓ for history. Search history with c-↑/c-↓'
+      );
+    } else {
+      this._input.placeholder = '';
+    }
 
     // initialize line history
     if (!Stdin._history.has(this._historyKey)) {
@@ -1079,6 +1156,11 @@ export class Stdin extends Widget implements IStdin {
    * not be called directly by user code.
    */
   handleEvent(event: KeyboardEvent): void {
+    if (this._resolved) {
+      // Do not handle any more key events if the promise was resolved.
+      event.preventDefault();
+      return;
+    }
     const input = this._input;
 
     if (event.type === 'keydown') {
@@ -1098,6 +1180,7 @@ export class Stdin extends Widget implements IStdin {
           this._value += input.value;
           Stdin._historyPush(this._historyKey, input.value);
         }
+        this._resolved = true;
         this._promise.resolve(void 0);
       } else if (event.key === 'Escape') {
         // currently this gets clobbered by the documentsearch:end command at the notebook level
@@ -1213,6 +1296,7 @@ export class Stdin extends Widget implements IStdin {
   private _trans: TranslationBundle;
   private _value: string;
   private _valueCache: string;
+  private _resolved: boolean = false;
 }
 
 export namespace Stdin {

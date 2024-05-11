@@ -7,7 +7,7 @@ import { DocumentManager } from '@jupyterlab/docmanager';
 import { DocumentRegistry } from '@jupyterlab/docregistry';
 import { DocumentWidgetOpenerMock } from '@jupyterlab/docregistry/lib/testutils';
 import { ServiceManagerMock } from '@jupyterlab/services/lib/testutils';
-import { signalToPromise } from '@jupyterlab/testing';
+import { framePromise, signalToPromise } from '@jupyterlab/testing';
 import { Signal } from '@lumino/signaling';
 import { Widget } from '@lumino/widgets';
 import expect from 'expect';
@@ -34,6 +34,14 @@ class TestDirListing extends DirListing {
     // Allows us to spy on onUpdateRequest.
     this.updated.emit();
   }
+}
+
+function getItemTitles(dirListing: DirListing) {
+  const items = Array.from(dirListing.contentNode.children) as HTMLElement[];
+
+  return items.map(
+    node => node.querySelector('.jp-DirListing-itemText span')?.textContent
+  );
 }
 
 describe('filebrowser/listing', () => {
@@ -80,6 +88,52 @@ describe('filebrowser/listing', () => {
         const options = createOptionsForConstructor();
         const dirListing = new DirListing(options);
         expect(dirListing).toBeInstanceOf(DirListing);
+      });
+    });
+
+    describe('#defaultRenderer', () => {
+      it('should enable scrolling when dragging items', () => {
+        const options = createOptionsForConstructor();
+        const dirListing = new DirListing(options);
+        expect(
+          dirListing.node.querySelector('[data-lm-dragscroll]')
+        ).toBeDefined();
+      });
+    });
+
+    describe('#selectItemByName()', () => {
+      it('should select item in the current directory by name', async () => {
+        const name = [...dirListing.sortedItems()][2].name;
+        expect(dirListing.isSelected(name)).toBe(false);
+        await dirListing.selectItemByName(name);
+        expect(dirListing.isSelected(name)).toBe(true);
+      });
+
+      it('should trigger update when selecting an item', async () => {
+        const name = [...dirListing.sortedItems()][2].name;
+        let updateEmitted = false;
+        const listener = () => {
+          updateEmitted = true;
+        };
+        dirListing.updated.connect(listener);
+        await dirListing.selectItemByName(name);
+        await framePromise();
+        dirListing.updated.disconnect(listener);
+        expect(updateEmitted).toBe(true);
+      });
+
+      it('should be a no-op if the item is already selected', async () => {
+        const name = [...dirListing.sortedItems()][2].name;
+        await dirListing.selectItemByName(name);
+        let updateEmitted = false;
+        const listener = () => {
+          updateEmitted = true;
+        };
+        dirListing.updated.connect(listener);
+        await dirListing.selectItemByName(name);
+        await framePromise();
+        dirListing.updated.disconnect(listener);
+        expect(updateEmitted).toBe(false);
       });
     });
 
@@ -671,6 +725,8 @@ describe('filebrowser/listing', () => {
             ) as HTMLInputElement;
             simulate(headerCheckbox, 'click');
             await signalToPromise(dirListing.updated);
+            expect(headerCheckbox.checked).toBe(true);
+            expect(headerCheckbox.indeterminate).toBe(false);
             expect(Array.from(dirListing.selectedItems())).toHaveLength(4);
             expect(headerCheckbox.getAttribute('aria-label')).toBe(
               ariaDeselectAll
@@ -689,6 +745,7 @@ describe('filebrowser/listing', () => {
               dirListing.headerNode
             ) as HTMLInputElement;
             expect(headerCheckbox.indeterminate).toBe(true);
+            expect(headerCheckbox.checked).toBe(false);
             expect(Array.from(dirListing.selectedItems())).toHaveLength(1);
             expect(headerCheckbox.getAttribute('aria-label')).toBe(
               ariaDeselectAll
@@ -701,6 +758,8 @@ describe('filebrowser/listing', () => {
             ) as HTMLInputElement;
             simulate(headerCheckbox, 'click');
             await signalToPromise(dirListing.updated);
+            expect(headerCheckbox.checked).toBe(false);
+            expect(headerCheckbox.indeterminate).toBe(false);
             expect(Array.from(dirListing.selectedItems())).toHaveLength(0);
             expect(headerCheckbox.getAttribute('aria-label')).toBe(
               ariaSelectAll
@@ -732,8 +791,158 @@ describe('filebrowser/listing', () => {
             ) as HTMLInputElement;
             simulate(headerCheckbox, 'click');
             await signalToPromise(dirListing.updated);
+            expect(headerCheckbox.checked).toBe(false);
+            expect(headerCheckbox.indeterminate).toBe(false);
             expect(Array.from(dirListing.selectedItems())).toHaveLength(0);
           });
+        });
+      });
+    });
+
+    describe('should sort correctly', () => {
+      beforeEach(async () => {
+        const options = createOptionsForConstructor();
+
+        const files: {
+          name: string;
+          type: 'file' | 'directory' | 'notebook';
+        }[] = [
+          { name: '1.txt', type: 'file' },
+          { name: '2', type: 'directory' },
+          { name: '3.ipynb', type: 'notebook' },
+          { name: '4.txt', type: 'file' },
+          { name: '5', type: 'directory' },
+          { name: '6.ipynb', type: 'notebook' }
+        ];
+
+        // Create files that can be sorted alphabetically
+        for (const file of files) {
+          const model = await options.model.manager.newUntitled({
+            type: file.type
+          });
+          await options.model.manager.rename(model.path, file.name);
+        }
+
+        // Create the widget and mount it to the DOM.
+        dirListing = new TestDirListing(options);
+        Widget.attach(dirListing, document.body);
+
+        // Wait for the widget to update its internal DOM state before running
+        // tests.
+        await signalToPromise(dirListing.updated);
+      });
+
+      describe('with sortNotebooksFirst set to false', () => {
+        it('should sort alphabetically ascending correctly', async () => {
+          dirListing.sort({
+            direction: 'ascending',
+            key: 'name'
+          });
+          await signalToPromise(dirListing.updated);
+
+          expect(getItemTitles(dirListing)).toEqual([
+            '2',
+            '5',
+            '1.txt',
+            '3.ipynb',
+            '4.txt',
+            '6.ipynb'
+          ]);
+        });
+        it('should sort alphabetically descending correctly', async () => {
+          dirListing.sort({
+            direction: 'descending',
+            key: 'name'
+          });
+          await signalToPromise(dirListing.updated);
+
+          expect(getItemTitles(dirListing)).toEqual([
+            '5',
+            '2',
+            '6.ipynb',
+            '4.txt',
+            '3.ipynb',
+            '1.txt'
+          ]);
+        });
+      });
+
+      describe('with sortNotebooksFirst set to true', () => {
+        it('should sort alphabetically ascending correctly', async () => {
+          dirListing.sort({
+            direction: 'ascending',
+            key: 'name'
+          });
+          await signalToPromise(dirListing.updated);
+          dirListing.setNotebooksFirstSorting(true);
+          await signalToPromise(dirListing.updated);
+
+          expect(getItemTitles(dirListing)).toEqual([
+            '2',
+            '5',
+            '3.ipynb',
+            '6.ipynb',
+            '1.txt',
+            '4.txt'
+          ]);
+        });
+        it('should sort alphabetically descending correctly', async () => {
+          dirListing.setNotebooksFirstSorting(true);
+          await signalToPromise(dirListing.updated);
+          dirListing.sort({
+            direction: 'descending',
+            key: 'name'
+          });
+          await signalToPromise(dirListing.updated);
+
+          expect(getItemTitles(dirListing)).toEqual([
+            '5',
+            '2',
+            '6.ipynb',
+            '3.ipynb',
+            '4.txt',
+            '1.txt'
+          ]);
+        });
+      });
+
+      describe('with sortNotebooksFirst toggled on/off', () => {
+        it('should sort correctly when switching between options', async () => {
+          dirListing.sort({
+            direction: 'descending',
+            key: 'last_modified'
+          });
+          await signalToPromise(dirListing.updated);
+          expect(getItemTitles(dirListing)).toEqual([
+            '2',
+            '5',
+            '1.txt',
+            '3.ipynb',
+            '4.txt',
+            '6.ipynb'
+          ]);
+
+          dirListing.setNotebooksFirstSorting(true);
+          await signalToPromise(dirListing.updated);
+          expect(getItemTitles(dirListing)).toEqual([
+            '2',
+            '5',
+            '3.ipynb',
+            '6.ipynb',
+            '1.txt',
+            '4.txt'
+          ]);
+
+          dirListing.setNotebooksFirstSorting(false);
+          await signalToPromise(dirListing.updated);
+          expect(getItemTitles(dirListing)).toEqual([
+            '2',
+            '5',
+            '1.txt',
+            '3.ipynb',
+            '4.txt',
+            '6.ipynb'
+          ]);
         });
       });
     });

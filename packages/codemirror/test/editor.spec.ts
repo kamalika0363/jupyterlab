@@ -40,7 +40,14 @@ describe('CodeMirrorEditor', () => {
     languages = new EditorLanguageRegistry();
     extensionsRegistry = new EditorExtensionRegistry();
     EditorExtensionRegistry.getDefaultExtensions()
-      .filter(ext => ['lineNumbers', 'lineWrap', 'readOnly'].includes(ext.name))
+      .filter(ext =>
+        [
+          'lineNumbers',
+          'lineWrap',
+          'readOnly',
+          'allowMultipleSelections'
+        ].includes(ext.name)
+      )
       .forEach(ext => {
         extensionsRegistry.addExtension(ext);
       });
@@ -455,6 +462,17 @@ describe('CodeMirrorEditor', () => {
         offset: 10,
         type: 'VariableName',
         value: 'bar'
+      });
+    });
+    it('should return preceeding token when it is the last token', async () => {
+      model.mimeType = 'text/x-python';
+      model.sharedModel.setSource('import');
+      // Needed to have the sharedModel content transferred to the editor document
+      await sleep(0.01);
+      expect(editor.getTokenAt(6)).toStrictEqual({
+        type: 'import',
+        offset: 0,
+        value: 'import'
       });
     });
   });

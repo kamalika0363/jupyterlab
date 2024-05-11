@@ -3,7 +3,12 @@
 
 import { ISessionContext, SessionContext } from '@jupyterlab/apputils';
 import { createSessionContext } from '@jupyterlab/apputils/lib/testutils';
-import { CodeCell, MarkdownCell, RawCell } from '@jupyterlab/cells';
+import {
+  CodeCell,
+  ICodeCellModel,
+  MarkdownCell,
+  RawCell
+} from '@jupyterlab/cells';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import { CellType, IMimeBundle } from '@jupyterlab/nbformat';
 import {
@@ -13,13 +18,16 @@ import {
   NotebookModel,
   StaticNotebook
 } from '@jupyterlab/notebook';
+import { Stdin } from '@jupyterlab/outputarea';
 import { IRenderMimeRegistry } from '@jupyterlab/rendermime';
 import { ISharedCodeCell } from '@jupyter/ydoc';
 import {
   acceptDialog,
   dismissDialog,
   JupyterServer,
-  sleep
+  signalToPromise,
+  sleep,
+  waitForDialog
 } from '@jupyterlab/testing';
 import { JSONArray, JSONObject, UUID } from '@lumino/coreutils';
 import * as utils from './utils';
@@ -162,7 +170,7 @@ describe('@jupyterlab/notebook', () => {
       });
     });
 
-    describe('#splitCell({})', () => {
+    describe('#splitCell()', () => {
       it('should split the active cell into two cells', () => {
         const cell = widget.activeCell!;
         const source = 'thisisasamplestringwithnospaces';
@@ -188,6 +196,32 @@ describe('@jupyterlab/notebook', () => {
         expect(widget.activeCell!.model.sharedModel.getSource()).toBe(
           '   is a test'
         );
+      });
+
+      it('should preserve all outputs in the second cell', async () => {
+        const cell = widget.activeCell as CodeCell;
+        // Produce two outputs (note, first will be `text/plain`,
+        // while second will be `application/vnd.jupyter.stdout`,
+        // which guarantees these will not be merged).
+        const index = widget.activeCellIndex;
+        const source = 'print(1)\ndisplay(2)';
+        cell.model.sharedModel.setSource(source);
+
+        // Should populate outputs
+        await NotebookActions.run(widget, ipySessionContext);
+        expect(cell.model.outputs).toHaveLength(2);
+
+        // Split cell
+        const editor = cell.editor as CodeEditor.IEditor;
+        editor.setCursorPosition(editor.getPositionAt(9)!);
+        NotebookActions.splitCell(widget);
+
+        // The output should now be only in the second cell
+        const cells = widget.model!.cells;
+        const first = cells.get(index) as ICodeCellModel;
+        const second = cells.get(index + 1) as ICodeCellModel;
+        expect(first.outputs).toHaveLength(0);
+        expect(second.outputs).toHaveLength(2);
       });
 
       it('should clear the existing selection', () => {
@@ -230,9 +264,9 @@ describe('@jupyterlab/notebook', () => {
         expect(widget.activeCell).toBeNull();
       });
 
-      it('should preserve the widget mode', () => {
+      it('should switch the widget mode to edit', () => {
         NotebookActions.splitCell(widget);
-        expect(widget.mode).toBe('command');
+        expect(widget.mode).toBe('edit');
         widget.mode = 'edit';
         NotebookActions.splitCell(widget);
         expect(widget.mode).toBe('edit');
@@ -299,6 +333,12 @@ describe('@jupyterlab/notebook', () => {
         NotebookActions.mergeCells(widget);
         const cell = widget.activeCell as CodeCell;
         expect(cell.model.outputs.length).toBe(0);
+      });
+
+      it('should mark cell as trusted as cells without output are trusted', () => {
+        NotebookActions.mergeCells(widget);
+        const cell = widget.activeCell as CodeCell;
+        expect(cell.model.trusted).toBe(true);
       });
 
       it('should preserve the widget mode', () => {
@@ -468,7 +508,7 @@ describe('@jupyterlab/notebook', () => {
         expect(widget.activeCell).toBeNull();
       });
 
-      it('should widget mode should be preserved', () => {
+      it('widget mode should be preserved', () => {
         NotebookActions.insertAbove(widget);
         expect(widget.mode).toBe('command');
         widget.mode = 'edit';
@@ -499,6 +539,11 @@ describe('@jupyterlab/notebook', () => {
       it('should be the new active cell', () => {
         NotebookActions.insertAbove(widget);
         expect(widget.activeCell!.model.sharedModel.getSource()).toBe('');
+      });
+
+      it('should mark inserted code cell as trusted', () => {
+        NotebookActions.insertAbove(widget);
+        expect(widget.activeCell!.model.trusted).toBe(true);
       });
     });
 
@@ -548,6 +593,11 @@ describe('@jupyterlab/notebook', () => {
       it('should be the new active cell', () => {
         NotebookActions.insertBelow(widget);
         expect(widget.activeCell!.model.sharedModel.getSource()).toBe('');
+      });
+
+      it('should mark inserted code cell as trusted', () => {
+        NotebookActions.insertBelow(widget);
+        expect(widget.activeCell!.model.trusted).toBe(true);
       });
     });
 
@@ -599,6 +649,54 @@ describe('@jupyterlab/notebook', () => {
         NotebookActions.changeCellType(widget, 'markdown');
         const cell = widget.activeCell as MarkdownCell;
         expect(cell.rendered).toBe(false);
+      });
+
+      it('should mark code cell as trusted', () => {
+        // Switch to markdown and then to code as otherwise this is no-op.
+        NotebookActions.changeCellType(widget, 'markdown');
+        NotebookActions.changeCellType(widget, 'code');
+        const cell = widget.activeCell as CodeCell;
+        expect(cell.model.trusted).toBe(true);
+      });
+
+      it('should clear trust metadata if switching away from code cell', () => {
+        widget.activeCell!.model.trusted = true;
+        NotebookActions.changeCellType(widget, 'markdown');
+        const cell = widget.activeCell as MarkdownCell;
+        expect(cell.model.metadata.trusted).toBe(undefined);
+      });
+
+      it('should not change cell type away from code cell when input is pending', async () => {
+        let cell = widget.activeCell as CodeCell;
+        expect(widget.activeCell).toBeInstanceOf(CodeCell);
+
+        const inputRequested = signalToPromise(cell.outputArea.inputRequested);
+
+        // Execute input request
+        cell.model.sharedModel.setSource('input()');
+        // Do not wait for completion yet: it will not complete until input is submitted
+        const donePromise = NotebookActions.run(widget, sessionContext);
+        // Wait for the input being requested from kernel
+        const stdin = (await inputRequested)[1];
+
+        // Try to change cell type
+        NotebookActions.changeCellType(widget, 'raw');
+        // Cell type should stay unchanged.
+        expect(widget.activeCell).toBeInstanceOf(CodeCell);
+
+        // Should show a dialog informing user why cell type could not be changed
+        await waitForDialog();
+        await acceptDialog();
+
+        // Submit the input
+        (stdin as Stdin).handleEvent(
+          new KeyboardEvent('keydown', { key: 'Enter' })
+        );
+        await donePromise;
+
+        // Try to change cell type again, it should work now
+        NotebookActions.changeCellType(widget, 'raw');
+        expect(widget.activeCell).toBeInstanceOf(RawCell);
       });
     });
 
@@ -818,6 +916,7 @@ describe('@jupyterlab/notebook', () => {
         expect(result).toBe(true);
         expect(widget.widgets.length).toBe(count + 1);
         expect(widget.activeCell).toBeInstanceOf(CodeCell);
+        expect(widget.activeCell!.model.trusted).toBe(true);
         expect(widget.mode).toBe('edit');
       });
 
@@ -914,6 +1013,7 @@ describe('@jupyterlab/notebook', () => {
         );
         expect(result).toBe(true);
         expect(widget.activeCell).toBeInstanceOf(CodeCell);
+        expect(widget.activeCell!.model.trusted).toBe(true);
         expect(widget.mode).toBe('edit');
         expect(widget.widgets.length).toBe(count + 1);
       });
@@ -964,6 +1064,36 @@ describe('@jupyterlab/notebook', () => {
         expect(result).toBe(false);
         expect(cell.rendered).toBe(true);
         expect(widget.activeCellIndex).toBe(2);
+      });
+    });
+
+    describe('#runCells()', () => {
+      beforeEach(() => {
+        // Make sure all cells have valid code.
+        widget.widgets[2].model.sharedModel.setSource('a = 1');
+      });
+
+      it('should change to command mode', async () => {
+        widget.mode = 'edit';
+        const result = await NotebookActions.runCells(
+          widget,
+          [widget.widgets[2]],
+          sessionContext
+        );
+        expect(result).toBe(true);
+        expect(widget.mode).toBe('command');
+      });
+
+      it('should preserve the existing selection', async () => {
+        const next = widget.widgets[2];
+        widget.select(next);
+        const result = await NotebookActions.runCells(
+          widget,
+          [widget.widgets[1]],
+          sessionContext
+        );
+        expect(result).toBe(true);
+        expect(widget.isSelected(widget.widgets[2])).toBe(true);
       });
     });
 
@@ -1034,6 +1164,27 @@ describe('@jupyterlab/notebook', () => {
         await sleep(400);
         expect(result).toBe(false);
         expect(cell.rendered).toBe(true);
+      });
+    });
+
+    describe('#runAllBelow()', () => {
+      it('should run all selected cell and all below', async () => {
+        const next = widget.widgets[1] as MarkdownCell;
+        const cell = widget.activeCell as CodeCell;
+        cell.model.outputs.clear();
+        next.rendered = false;
+        const result = await NotebookActions.runAllBelow(
+          widget,
+          sessionContext
+        );
+        expect(result).toBe(true);
+        expect(cell.model.outputs.length).toBeGreaterThan(0);
+        expect(next.rendered).toBe(true);
+      });
+
+      it('should activate the last cell', async () => {
+        await NotebookActions.runAllBelow(widget, sessionContext);
+        expect(widget.activeCellIndex).toBe(widget.widgets.length - 1);
       });
     });
 
@@ -1542,8 +1693,10 @@ describe('@jupyterlab/notebook', () => {
         NotebookActions.clearOutputs(widget);
         let cell = widget.widgets[0] as CodeCell;
         expect(cell.model.outputs.length).toBe(0);
+        expect(cell.model.trusted).toBe(true);
         cell = widget.widgets[index] as CodeCell;
         expect(cell.model.outputs.length).toBe(0);
+        expect(cell.model.trusted).toBe(true);
       });
 
       it('should preserve the widget mode', () => {
@@ -1571,6 +1724,7 @@ describe('@jupyterlab/notebook', () => {
           if (cell instanceof CodeCell) {
             // eslint-disable-next-line jest/no-conditional-expect
             expect(cell.model.outputs.length).toBe(0);
+            expect(cell.model.trusted).toBe(true);
           }
         }
       });

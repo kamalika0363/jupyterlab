@@ -13,14 +13,26 @@ import { Widget } from '@lumino/widgets';
  * The document registry token.
  */
 export const IDocumentManager = new Token<IDocumentManager>(
-  '@jupyterlab/docmanager:IDocumentManager'
+  '@jupyterlab/docmanager:IDocumentManager',
+  `A service for the manager for all
+  documents used by the application. Use this if you want to open and close documents,
+  create and delete files, and otherwise interact with the file system.`
 );
 
 /**
  * The document widget opener token.
  */
 export const IDocumentWidgetOpener = new Token<IDocumentWidgetOpener>(
-  '@jupyterlab/docmanager:IDocumentWidgetOpener'
+  '@jupyterlab/docmanager:IDocumentWidgetOpener',
+  `A service to open a widget.`
+);
+
+/**
+ * The recent documents database token.
+ */
+export const IRecentsManager = new Token<IRecentsManager>(
+  '@jupyterlab/docmanager:IRecentsManager',
+  `A service providing information about recently opened and closed documents`
 );
 
 /**
@@ -275,3 +287,65 @@ export interface IDocumentWidgetOpener {
    */
   readonly opened: ISignal<IDocumentWidgetOpener, IDocumentWidget>;
 }
+
+/**
+ * Recent opened items manager.
+ */
+export interface IRecentsManager extends IDisposable {
+  /**
+   * Get the recently opened documents.
+   */
+  readonly recentlyOpened: RecentDocument[];
+
+  /**
+   * Get the recently closed items.
+   */
+  readonly recentlyClosed: RecentDocument[];
+
+  /**
+   * Signal emitted when either of the list changes.
+   */
+  readonly changed: ISignal<IRecentsManager, void>;
+
+  /**
+   * Check if the recent item is valid, remove if it from both lists if it is not.
+   */
+  validate(recent: RecentDocument): Promise<boolean>;
+
+  /**
+   * Add a new path to the recent list.
+   */
+  addRecent(
+    document: Omit<RecentDocument, 'root'>,
+    event: 'opened' | 'closed'
+  ): void;
+
+  /**
+   * Remove the document from recents list.
+   */
+  removeRecent(document: RecentDocument, event: 'opened' | 'closed'): void;
+}
+
+/**
+ * The interface for a recent document.
+ */
+export type RecentDocument = {
+  /**
+   * The server root path.
+   *
+   * Allows to select only the currently accessible documents.
+   */
+  root: string;
+  /**
+   * The path to the document.
+   */
+  path: string;
+  /**
+   * The document content type or `directory` literal for directories.
+   */
+  contentType: string;
+  /**
+   * The factory that was used when the document was most recently opened or closed.
+   */
+  factory?: string;
+};

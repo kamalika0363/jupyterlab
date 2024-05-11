@@ -8,7 +8,7 @@ import { ContextMenuSvg } from '@jupyterlab/ui-components';
 import { Application, IPlugin } from '@lumino/application';
 import { Token } from '@lumino/coreutils';
 import { ISignal, Signal } from '@lumino/signaling';
-import { Widget } from '@lumino/widgets';
+import { FocusTracker, Widget } from '@lumino/widgets';
 
 /**
  * The type for all JupyterFrontEnd application plugins.
@@ -277,6 +277,23 @@ export namespace JupyterFrontEnd {
     readonly currentWidget: Widget | null;
 
     /**
+     * A signal emitted when the focused widget in the application shell changes.
+     *
+     * ### Notes
+     * Shells may not always have a {@link currentWidget} or it may not change.
+     * Therefore implementing this signal is only expected for shells with the ability
+     * to switch between active widgets.
+     *
+     * Although the signal argument type references a focus tracker, the shell
+     * current widget may not be the one focused as its definition is an implementation
+     * detail.
+     */
+    readonly currentChanged?: ISignal<
+      IShell,
+      FocusTracker.IChangedArgs<Widget>
+    >;
+
+    /**
      * Returns an iterator for the widgets inside the application shell.
      *
      * @param area - Optional regions in the shell whose widgets are iterated.
@@ -303,7 +320,12 @@ export namespace JupyterFrontEnd {
   /**
    * The application paths dictionary token.
    */
-  export const IPaths = new Token<IPaths>('@jupyterlab/application:IPaths');
+  export const IPaths = new Token<IPaths>(
+    '@jupyterlab/application:IPaths',
+    `A service providing information about various
+  URLs and server paths for the current application. Use this service if you want to
+  assemble URLs to use the JupyterLab REST API.`
+  );
 
   /**
    * An interface for URL and directory paths used by a Jupyter front-end.
@@ -364,7 +386,8 @@ export namespace JupyterFrontEnd {
    * dependency if it is possible to make it an optional dependency.
    */
   export const ITreeResolver = new Token<ITreeResolver>(
-    '@jupyterlab/application:ITreeResolver'
+    '@jupyterlab/application:ITreeResolver',
+    'A service to resolve the tree path.'
   );
 
   /**

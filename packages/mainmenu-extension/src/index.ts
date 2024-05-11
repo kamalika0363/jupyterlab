@@ -6,7 +6,7 @@
  */
 
 import {
-  createSemanticCommand,
+  addSemanticCommand,
   ILabShell,
   IRouter,
   JupyterFrontEnd,
@@ -44,6 +44,7 @@ import { find } from '@lumino/algorithm';
 import { JSONExt } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 import { Menu, Widget } from '@lumino/widgets';
+import { recentsMenuPlugin } from './recents';
 
 const PLUGIN_ID = '@jupyterlab/mainmenu-extension:plugin';
 
@@ -132,6 +133,7 @@ export namespace CommandIDs {
  */
 const plugin: JupyterFrontEndPlugin<IMainMenu> = {
   id: PLUGIN_ID,
+  description: 'Adds and provides the application main menu.',
   requires: [IRouter, ITranslator],
   optional: [ICommandPalette, ILabShell, ISettingRegistry],
   provides: IMainMenu,
@@ -259,126 +261,121 @@ const plugin: JupyterFrontEndPlugin<IMainMenu> = {
 /**
  * Create the basic `Edit` menu.
  */
-export function createEditMenu(
+function createEditMenu(
   app: JupyterFrontEnd,
   menu: IEditMenu,
   trans: TranslationBundle
 ): void {
-  const commands = app.commands;
-
+  const { commands, shell } = app;
   // Add the undo/redo commands the the Edit menu.
-  commands.addCommand(
-    CommandIDs.undo,
-    createSemanticCommand(
-      app,
-      menu.undoers.undo,
-      {
-        label: trans.__('Undo')
-      },
-      trans
-    )
-  );
-  commands.addCommand(
-    CommandIDs.redo,
-    createSemanticCommand(
-      app,
-      menu.undoers.redo,
-      {
-        label: trans.__('Redo')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.undo,
+    commands,
+    shell,
+    semanticCommands: menu.undoers.undo,
+    default: {
+      label: trans.__('Undo')
+    },
+    trans
+  });
+  addSemanticCommand({
+    id: CommandIDs.redo,
+    commands,
+    shell,
+    semanticCommands: menu.undoers.redo,
+    default: {
+      label: trans.__('Redo')
+    },
+    trans
+  });
 
   // Add the clear commands to the Edit menu.
-  commands.addCommand(
-    CommandIDs.clearCurrent,
-    createSemanticCommand(
-      app,
-      menu.clearers.clearCurrent,
-      {
-        label: trans.__('Clear')
-      },
-      trans
-    )
-  );
-  commands.addCommand(
-    CommandIDs.clearAll,
-    createSemanticCommand(
-      app,
-      menu.clearers.clearAll,
-      {
-        label: trans.__('Clear All')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.clearCurrent,
+    commands,
+    shell,
+    semanticCommands: menu.clearers.clearCurrent,
+    default: {
+      label: trans.__('Clear')
+    },
+    trans
+  });
+  addSemanticCommand({
+    id: CommandIDs.clearAll,
+    commands,
+    shell,
+    semanticCommands: menu.clearers.clearAll,
+    default: {
+      label: trans.__('Clear All')
+    },
+    trans
+  });
 
-  commands.addCommand(
-    CommandIDs.goToLine,
-    createSemanticCommand(
-      app,
-      menu.goToLiners,
-      {
-        label: trans.__('Go to Line…')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.goToLine,
+    commands,
+    shell,
+    semanticCommands: menu.goToLiners,
+    default: {
+      label: trans.__('Go to Line…')
+    },
+    trans
+  });
 }
 
 /**
  * Create the basic `File` menu.
  */
-export function createFileMenu(
+function createFileMenu(
   app: JupyterFrontEnd,
   menu: IFileMenu,
   router: IRouter,
   trans: TranslationBundle
 ): void {
-  const commands = app.commands;
+  const { commands, shell } = app;
 
   // Add a delegator command for closing and cleaning up an activity.
   // This one is a bit different, in that we consider it enabled
   // even if it cannot find a delegate for the activity.
   // In that case, we instead call the application `close` command.
-  commands.addCommand(CommandIDs.closeAndCleanup, {
-    ...createSemanticCommand(
-      app,
-      menu.closeAndCleaners,
-      {
-        execute: 'application:close',
-        label: trans.__('Close and Shut Down'),
-        isEnabled: true
-      },
-      trans
-    ),
-    isEnabled: () =>
-      !!app.shell.currentWidget && !!app.shell.currentWidget.title.closable
+  addSemanticCommand({
+    id: CommandIDs.closeAndCleanup,
+    commands,
+    shell,
+    semanticCommands: menu.closeAndCleaners,
+    default: {
+      execute: 'application:close',
+      label: trans.__('Close and Shut Down'),
+      isEnabled: true
+    },
+    overrides: {
+      isEnabled: () =>
+        !!app.shell.currentWidget && !!app.shell.currentWidget.title.closable
+    },
+    trans
   });
 
   // Add a delegator command for creating a console for an activity.
-  commands.addCommand(
-    CommandIDs.createConsole,
-    createSemanticCommand(
-      app,
-      menu.consoleCreators,
-      {
-        label: trans.__('New Console for Activity')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.createConsole,
+    commands,
+    shell,
+    semanticCommands: menu.consoleCreators,
+    default: {
+      label: trans.__('New Console for Activity')
+    },
+    trans
+  });
 
   commands.addCommand(CommandIDs.shutdown, {
     label: trans.__('Shut Down'),
-    caption: trans.__('Shut down JupyterLab'),
+    caption: trans.__('Shut down %1', app.name),
     isVisible: () => menu.quitEntry,
     isEnabled: () => menu.quitEntry,
     execute: () => {
       return showDialog({
         title: trans.__('Shutdown confirmation'),
-        body: trans.__('Please confirm you want to shut down JupyterLab.'),
+        body: trans.__('Please confirm you want to shut down %1.', app.name),
         buttons: [
           Dialog.cancelButton(),
           Dialog.warnButton({ label: trans.__('Shut Down') })
@@ -415,7 +412,8 @@ export function createFileMenu(
                 );
                 const p2 = document.createElement('p');
                 p2.textContent = trans.__(
-                  'To use JupyterLab again, you will need to relaunch it.'
+                  'To use %1 again, you will need to relaunch it.',
+                  app.name
                 );
 
                 body.appendChild(p1);
@@ -440,7 +438,7 @@ export function createFileMenu(
 
   commands.addCommand(CommandIDs.logout, {
     label: trans.__('Log Out'),
-    caption: trans.__('Log out of JupyterLab'),
+    caption: trans.__('Log out of %1', app.name),
     isVisible: () => menu.quitEntry,
     isEnabled: () => menu.quitEntry,
     execute: () => {
@@ -452,87 +450,87 @@ export function createFileMenu(
 /**
  * Create the basic `Kernel` menu.
  */
-export function createKernelMenu(
+function createKernelMenu(
   app: JupyterFrontEnd,
   menu: IKernelMenu,
   trans: TranslationBundle
 ): void {
-  const commands = app.commands;
+  const { commands, shell } = app;
 
-  commands.addCommand(CommandIDs.interruptKernel, {
-    ...createSemanticCommand(
-      app,
-      menu.kernelUsers.interruptKernel,
-      {
-        label: trans.__('Interrupt Kernel'),
-        caption: trans.__('Interrupt the kernel')
-      },
-      trans
-    ),
-    icon: args => (args.toolbar ? stopIcon : undefined)
+  addSemanticCommand({
+    id: CommandIDs.interruptKernel,
+    commands,
+    shell,
+    semanticCommands: menu.kernelUsers.interruptKernel,
+    default: {
+      label: trans.__('Interrupt Kernel'),
+      caption: trans.__('Interrupt the kernel')
+    },
+    overrides: { icon: args => (args.toolbar ? stopIcon : undefined) },
+    trans
   });
 
-  commands.addCommand(
-    CommandIDs.reconnectToKernel,
-    createSemanticCommand(
-      app,
-      menu.kernelUsers.reconnectToKernel,
-      {
-        label: trans.__('Reconnect to Kernel')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.reconnectToKernel,
 
-  commands.addCommand(CommandIDs.restartKernel, {
-    ...createSemanticCommand(
-      app,
+    commands,
+    shell,
+    semanticCommands: menu.kernelUsers.reconnectToKernel,
+    default: {
+      label: trans.__('Reconnect to Kernel')
+    },
+    trans
+  });
+
+  addSemanticCommand({
+    id: CommandIDs.restartKernel,
+    commands,
+    shell,
+    semanticCommands: menu.kernelUsers.restartKernel,
+    default: {
+      label: trans.__('Restart Kernel…'),
+      caption: trans.__('Restart the kernel')
+    },
+    overrides: { icon: args => (args.toolbar ? refreshIcon : undefined) },
+    trans
+  });
+
+  addSemanticCommand({
+    id: CommandIDs.restartKernelAndClear,
+    commands,
+    shell,
+    semanticCommands: [
       menu.kernelUsers.restartKernel,
-      {
-        label: trans.__('Restart Kernel…'),
-        caption: trans.__('Restart the kernel')
-      },
-      trans
-    ),
-    icon: args => (args.toolbar ? refreshIcon : undefined)
+      menu.kernelUsers.clearWidget
+    ],
+    default: {
+      label: trans.__('Restart Kernel and Clear…')
+    },
+    trans
   });
 
-  commands.addCommand(
-    CommandIDs.restartKernelAndClear,
-    createSemanticCommand(
-      app,
-      [menu.kernelUsers.restartKernel, menu.kernelUsers.clearWidget],
-      {
-        label: trans.__('Restart Kernel and Clear…')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.changeKernel,
+    commands,
+    shell,
+    semanticCommands: menu.kernelUsers.changeKernel,
+    default: {
+      label: trans.__('Change Kernel…')
+    },
+    trans
+  });
 
-  commands.addCommand(
-    CommandIDs.changeKernel,
-    createSemanticCommand(
-      app,
-      menu.kernelUsers.changeKernel,
-      {
-        label: trans.__('Change Kernel…')
-      },
-      trans
-    )
-  );
-
-  commands.addCommand(
-    CommandIDs.shutdownKernel,
-    createSemanticCommand(
-      app,
-      menu.kernelUsers.shutdownKernel,
-      {
-        label: trans.__('Shut Down Kernel'),
-        caption: trans.__('Shut down kernel')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.shutdownKernel,
+    commands,
+    shell,
+    semanticCommands: menu.kernelUsers.shutdownKernel,
+    default: {
+      label: trans.__('Shut Down Kernel'),
+      caption: trans.__('Shut down kernel')
+    },
+    trans
+  });
 
   commands.addCommand(CommandIDs.shutdownAllKernels, {
     label: trans.__('Shut Down All Kernels…'),
@@ -559,104 +557,104 @@ export function createKernelMenu(
 /**
  * Create the basic `View` menu.
  */
-export function createViewMenu(
+function createViewMenu(
   app: JupyterFrontEnd,
   menu: IViewMenu,
   trans: TranslationBundle
 ): void {
-  const commands = app.commands;
+  const { commands, shell } = app;
 
-  commands.addCommand(
-    CommandIDs.lineNumbering,
-    createSemanticCommand(
-      app,
-      menu.editorViewers.toggleLineNumbers,
-      {
-        label: trans.__('Show Line Numbers')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.lineNumbering,
+    commands,
+    shell,
+    semanticCommands: menu.editorViewers.toggleLineNumbers,
+    default: {
+      label: trans.__('Show Line Numbers')
+    },
+    trans
+  });
 
-  commands.addCommand(
-    CommandIDs.matchBrackets,
-    createSemanticCommand(
-      app,
-      menu.editorViewers.toggleMatchBrackets,
-      {
-        label: trans.__('Match Brackets')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.matchBrackets,
+    commands,
+    shell,
+    semanticCommands: menu.editorViewers.toggleMatchBrackets,
+    default: {
+      label: trans.__('Match Brackets')
+    },
+    trans
+  });
 
-  commands.addCommand(
-    CommandIDs.wordWrap,
-    createSemanticCommand(
-      app,
-      menu.editorViewers.toggleWordWrap,
-      {
-        label: trans.__('Wrap Words')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.wordWrap,
+    commands,
+    shell,
+    semanticCommands: menu.editorViewers.toggleWordWrap,
+    default: {
+      label: trans.__('Wrap Words')
+    },
+    trans
+  });
 }
 
 /**
  * Create the basic `Run` menu.
  */
-export function createRunMenu(
+function createRunMenu(
   app: JupyterFrontEnd,
   menu: IRunMenu,
   trans: TranslationBundle
 ): void {
-  const commands = app.commands;
+  const { commands, shell } = app;
 
-  commands.addCommand(CommandIDs.run, {
-    ...createSemanticCommand(
-      app,
-      menu.codeRunners.run,
-      {
-        label: trans.__('Run Selected'),
-        caption: trans.__('Run Selected')
-      },
-      trans
-    ),
-    icon: args => (args.toolbar ? runIcon : undefined)
+  addSemanticCommand({
+    id: CommandIDs.run,
+    commands,
+    shell,
+    semanticCommands: menu.codeRunners.run,
+    default: {
+      label: trans.__('Run Selected'),
+      caption: trans.__('Run Selected')
+    },
+    overrides: {
+      icon: args => (args.toolbar ? runIcon : undefined)
+    },
+    trans
   });
 
-  commands.addCommand(
-    CommandIDs.runAll,
-    createSemanticCommand(
-      app,
-      menu.codeRunners.runAll,
-      {
-        label: trans.__('Run All'),
-        caption: trans.__('Run All')
-      },
-      trans
-    )
-  );
+  addSemanticCommand({
+    id: CommandIDs.runAll,
+    commands,
+    shell,
+    semanticCommands: menu.codeRunners.runAll,
+    default: {
+      label: trans.__('Run All'),
+      caption: trans.__('Run All')
+    },
+    trans
+  });
 
-  commands.addCommand(CommandIDs.restartAndRunAll, {
-    ...createSemanticCommand(
-      app,
-      [menu.codeRunners.restart, menu.codeRunners.runAll],
-      {
-        label: trans.__('Restart Kernel and Run All'),
-        caption: trans.__('Restart Kernel and Run All')
-      },
-      trans
-    ),
-    icon: args => (args.toolbar ? fastForwardIcon : undefined)
+  addSemanticCommand({
+    id: CommandIDs.restartAndRunAll,
+    commands,
+    shell,
+    semanticCommands: [menu.codeRunners.restart, menu.codeRunners.runAll],
+    default: {
+      label: trans.__('Restart Kernel and Run All'),
+      caption: trans.__('Restart Kernel and Run All')
+    },
+    overrides: {
+      icon: args => (args.toolbar ? fastForwardIcon : undefined)
+    },
+    trans
   });
 }
 
 /**
  * Create the basic `Tabs` menu.
  */
-export function createTabsMenu(
+function createTabsMenu(
   app: JupyterFrontEnd,
   menu: ITabsMenu,
   labShell: ILabShell | null,
@@ -739,26 +737,26 @@ export function createTabsMenu(
 /**
  * Create the basic `Help` menu.
  */
-export function createHelpMenu(
+function createHelpMenu(
   app: JupyterFrontEnd,
   menu: IHelpMenu,
   trans: TranslationBundle
 ): void {
-  app.commands.addCommand(
-    CommandIDs.getKernel,
-    createSemanticCommand(
-      app,
-      menu.getKernel,
-      {
-        label: trans.__('Get Kernel'),
-        isVisible: false
-      },
-      trans
-    )
-  );
+  const { commands, shell } = app;
+  addSemanticCommand({
+    id: CommandIDs.getKernel,
+    commands,
+    shell,
+    semanticCommands: menu.getKernel,
+    default: {
+      label: trans.__('Get Kernel'),
+      isVisible: false
+    },
+    trans
+  });
 }
 
-export default plugin;
+export default [plugin, recentsMenuPlugin];
 
 /**
  * A namespace for Private data.

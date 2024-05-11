@@ -2,8 +2,6 @@
 
 A JupyterLab extension for rendering [Vega](https://vega.github.io/vega) 5 and [Vega-Lite](https://vega.github.io/vega-lite) 3.
 
-![demo](http://g.recordit.co/USoTkuCOfR.gif)
-
 This extension is in the official JupyterLab distribution.
 
 ## Usage
@@ -102,4 +100,4 @@ To render a `.vl`, `.vg`, `vl.json` or `.vg.json` file, simply open it:
 
 ## Development
 
-See the [JupyterLab Contributor Documentation](https://github.com/jupyterlab/jupyterlab/blob/master/CONTRIBUTING.md).
+See the [JupyterLab Contributor Documentation](https://github.com/jupyterlab/jupyterlab/blob/main/CONTRIBUTING.md).

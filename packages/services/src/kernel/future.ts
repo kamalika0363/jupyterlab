@@ -189,6 +189,8 @@ export abstract class KernelFutureHandler<
       // is waiting for the promise to resolve. This prevents the error from
       // being displayed in the console, but does not prevent it from being
       // caught by a client who is waiting for it.
+      // Note: any `.then` and `.finally` attached to the `done` promise
+      // will cause the error to be thrown as uncaught anyways.
       this._done.promise.catch(() => {
         /* no-op */
       });
@@ -312,7 +314,8 @@ export abstract class KernelFutureHandler<
 }
 
 export class KernelControlFutureHandler<
-    REQUEST extends KernelMessage.IControlMessage = KernelMessage.IControlMessage,
+    REQUEST extends
+      KernelMessage.IControlMessage = KernelMessage.IControlMessage,
     REPLY extends KernelMessage.IControlMessage = KernelMessage.IControlMessage
   >
   extends KernelFutureHandler<REQUEST, REPLY>

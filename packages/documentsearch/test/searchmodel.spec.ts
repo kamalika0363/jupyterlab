@@ -10,19 +10,28 @@ import { signalToPromise } from '@jupyterlab/testing';
 
 class LogSearchProvider extends GenericSearchProvider {
   private _queryReceived: PromiseDelegate<RegExp | null>;
+  private _queryEnded: PromiseDelegate<void>;
   private _initialQuery: string = 'unset';
 
   constructor(widget: Widget) {
     super(widget);
     this._queryReceived = new PromiseDelegate();
+    this._queryEnded = new PromiseDelegate();
   }
   get queryReceived(): Promise<RegExp | null> {
     return this._queryReceived.promise;
+  }
+  get queryEnded(): Promise<void> {
+    return this._queryEnded.promise;
   }
 
   async startQuery(query: RegExp | null, filters = {}): Promise<void> {
     this._queryReceived.resolve(query);
     this._queryReceived = new PromiseDelegate();
+  }
+
+  async endQuery(): Promise<void> {
+    this._queryEnded.resolve();
   }
 
   set initialQuery(query: string) {
@@ -60,6 +69,16 @@ describe('documentsearch/searchmodel', () => {
         expect(query.test('test')).toEqual(false);
         query.lastIndex = 0;
       });
+      it('should end search when query is empty', async () => {
+        // Start a search
+        model.searchExpression = 'query';
+        expect(model.searchExpression).toEqual('query');
+        await provider.queryReceived;
+        // Empty the query
+        model.searchExpression = '';
+        await provider.queryEnded;
+        expect(model.searchExpression).toEqual('');
+      });
     });
 
     describe('#parsingError', () => {
@@ -68,9 +87,12 @@ describe('documentsearch/searchmodel', () => {
         expect(model.parsingError).toEqual('');
         model.searchExpression = 'query\\';
         await signalToPromise(model.stateChanged);
-        expect(model.parsingError).toEqual(
-          'SyntaxError: Invalid regular expression: /query\\/: \\ at end of pattern'
-        );
+        expect([
+          // Node 18.x and older
+          'SyntaxError: Invalid regular expression: /query\\/: \\ at end of pattern',
+          // Node 20.x and newer
+          'SyntaxError: Invalid regular expression: /query\\/gim: \\ at end of pattern'
+        ]).toContain(model.parsingError);
       });
     });
 
@@ -139,6 +161,36 @@ describe('documentsearch/searchmodel', () => {
         query.lastIndex = 0;
         expect(query.test('XqueryX')).toEqual(true);
         query.lastIndex = 0;
+      });
+    });
+
+    describe('#replaceText', () => {
+      it('defaults to empty string', () => {
+        expect(model.replaceText).toEqual('');
+      });
+
+      it('changes after assignment with setter', () => {
+        model.replaceText = 'test';
+        expect(model.replaceText).toEqual('test');
+      });
+
+      it('emits `stateChanged` signal on assignment', () => {
+        let emitted = false;
+        model.stateChanged.connect(() => {
+          emitted = true;
+        });
+        model.replaceText = 'test';
+        expect(emitted).toEqual(true);
+      });
+
+      it('does not emit `stateChanged` signal if value has not changed', () => {
+        let emitted = 0;
+        model.stateChanged.connect(() => {
+          emitted += 1;
+        });
+        model.replaceText = '1';
+        model.replaceText = '1';
+        expect(emitted).toEqual(1);
       });
     });
   });

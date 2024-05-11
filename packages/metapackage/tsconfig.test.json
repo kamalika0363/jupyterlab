@@ -165,6 +165,12 @@
       "path": "../mathjax-extension"
     },
     {
+      "path": "../mermaid"
+    },
+    {
+      "path": "../mermaid-extension"
+    },
+    {
       "path": "../metadataform"
     },
     {
@@ -187,6 +193,12 @@
     },
     {
       "path": "../pdf-extension"
+    },
+    {
+      "path": "../pluginmanager"
+    },
+    {
+      "path": "../pluginmanager-extension"
     },
     {
       "path": "../property-inspector"
@@ -240,6 +252,9 @@
       "path": "../theme-dark-extension"
     },
     {
+      "path": "../theme-dark-high-contrast-extension"
+    },
+    {
       "path": "../theme-light-extension"
     },
     {
@@ -268,6 +283,12 @@
     },
     {
       "path": "../vega5-extension"
+    },
+    {
+      "path": "../workspaces"
+    },
+    {
+      "path": "../workspaces-extension"
     },
     {
       "path": "."

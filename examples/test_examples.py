@@ -9,6 +9,7 @@ there are no console errors or uncaught errors prior to a sentinel
 string being printed (see test/example.spec.ts for the sentinel strings
 checked before the browser.close() call).
 """
+
 import argparse
 import glob
 import os.path as osp
@@ -41,19 +42,27 @@ def main():
 
     print("Testing %s" % paths)
     count = 0
+    failed = []
     for path in sorted(paths):
-        if osp.basename(path) == "node":
-            with tempfile.TemporaryDirectory() as cwd:
-                header(path)
-                runner = osp.join(path, "main.py")
-                subprocess.check_call([sys.executable, runner], cwd=cwd)
-                count += 1
-        elif osp.exists(osp.join(path, "main.py")):
-            with tempfile.TemporaryDirectory() as cwd:
-                header(path)
-                runner = osp.join(here, "example_check.py")
-                subprocess.check_call([sys.executable, runner, path], cwd=cwd)
-                count += 1
+        try:
+            if osp.basename(path) == "node":
+                with tempfile.TemporaryDirectory() as cwd:
+                    header(path)
+                    runner = osp.join(path, "main.py")
+                    subprocess.check_call([sys.executable, runner], cwd=cwd)  # noqa S603
+                    count += 1
+            elif osp.exists(osp.join(path, "main.py")):
+                with tempfile.TemporaryDirectory() as cwd:
+                    header(path)
+                    runner = osp.join(here, "example_check.py")
+                    subprocess.check_call([sys.executable, runner, path], cwd=cwd)  # noqa S603
+                    count += 1
+        except subprocess.CalledProcessError:
+            failed.append(path)
+
+    if failed:
+        msg = "The following examples failed:\n-{}".format("\n-".join(failed))
+        raise AssertionError(msg)
 
     print("\n\n%s tests complete!" % count)
 

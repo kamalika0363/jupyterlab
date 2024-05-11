@@ -650,6 +650,13 @@ export class CodeCellModel extends CellModel implements ICodeCellModel {
   }
 
   /**
+   * Public Set whether the cell is dirty or not.
+   */
+  set isDirty(dirty: boolean) {
+    this._setDirty(dirty);
+  }
+
+  /**
    * The cell outputs.
    */
   get outputs(): IOutputAreaModel {
@@ -663,6 +670,8 @@ export class CodeCellModel extends CellModel implements ICodeCellModel {
     this.executionCount = null;
     this._setDirty(false);
     this.sharedModel.deleteMetadata('execution');
+    // We trust this cell as it no longer has any outputs.
+    this.trusted = true;
   }
 
   /**

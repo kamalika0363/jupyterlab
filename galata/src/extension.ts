@@ -1,9 +1,10 @@
-// Copyright (c) Jupyter Development Team.
-// Copyright (c) Bloomberg Finance LP.
-// Distributed under the terms of the Modified BSD License.
+/*
+ * Copyright (c) Jupyter Development Team.
+ * Distributed under the terms of the Modified BSD License.
+ * Copyright (c) Bloomberg Finance LP.
+ */
 
 // This export the types (and only the types) from extension/token.ts
-// Required for typedoc to be happy otherwise we could have used `from '@jupyterlab/extension/lib/token';`
 
 import type { JupyterFrontEnd } from '@jupyterlab/application';
 import type { IRouter } from '@jupyterlab/application';
@@ -13,6 +14,7 @@ import type {
   NotificationManager,
   WidgetTracker
 } from '@jupyterlab/apputils';
+import type { IDebugger } from '@jupyterlab/debugger';
 import type { IDocumentManager } from '@jupyterlab/docmanager';
 import type { ISettingRegistry } from '@jupyterlab/settingregistry';
 
@@ -86,6 +88,7 @@ export interface IPluginNameToInterfaceMap {
   '@jupyterlab/application-extension:router': IRouter;
   '@jupyterlab/docmanager-extension:manager': IDocumentManager;
   '@jupyterlab/apputils-extension:settings': ISettingRegistry;
+  '@jupyterlab/debugger-extension:service': IDebugger;
 }
 
 /**

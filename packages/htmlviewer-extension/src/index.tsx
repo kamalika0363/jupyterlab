@@ -50,6 +50,7 @@ namespace CommandIDs {
 const htmlPlugin: JupyterFrontEndPlugin<IHTMLViewerTracker> = {
   activate: activateHTMLViewer,
   id: HTML_VIEWER_PLUGIN_ID,
+  description: 'Adds HTML file viewer and provides its tracker.',
   provides: IHTMLViewerTracker,
   requires: [ITranslator],
   optional: [
@@ -199,6 +200,11 @@ function activateHTMLViewer(
       current.trusted = !current.trusted;
     }
   });
+
+  tracker.currentChanged.connect(() => {
+    app.commands.notifyCommandChanged(CommandIDs.trustHTML);
+  });
+
   if (palette) {
     palette.addItem({
       command: CommandIDs.trustHTML,

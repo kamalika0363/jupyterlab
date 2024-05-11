@@ -32,7 +32,13 @@
 
 import { ISearchMatch } from '@jupyterlab/documentsearch';
 import { CodeMirrorEditor } from './editor';
-import { StateEffect, StateEffectType, StateField } from '@codemirror/state';
+import {
+  EditorSelection,
+  Extension,
+  StateEffect,
+  StateEffectType,
+  StateField
+} from '@codemirror/state';
 import { Decoration, DecorationSet, EditorView } from '@codemirror/view';
 import { CodeEditor } from '@jupyterlab/codeeditor';
 import {
@@ -44,6 +50,43 @@ import {
 } from '@jupyterlab/documentsearch';
 import { ISignal, Signal } from '@lumino/signaling';
 import { ISharedText, SourceChange } from '@jupyter/ydoc';
+
+/**
+ * Defines from which position the search should be executed.
+ * - `'selection'` - search from selection head/anchor (depending on search direction)
+ * - `'previous-match'` - search from previous match
+ * - `'auto'` - search from selection if editor is focused or previous match otherwise
+ * - `'selection-start'` - search from selection head/anchor whichever is smaller
+ * - `'start'` - from start of the editor
+ */
+export type SearchStartAnchor =
+  | 'auto'
+  | 'selection'
+  | 'selection-start'
+  | 'previous-match'
+  | 'start';
+
+interface IHighlightMatchOptions {
+  /**
+   * Whether the highlighted match should be scrolled into view.
+   * Defaults to `true`.
+   */
+  scroll?: boolean;
+  /**
+   * Whether the user cursor should be moved to select the match.
+   * `protectSelection` flag takes precedence over this option.
+   * Defaults to `true`.
+   */
+  select?: boolean;
+}
+
+export interface IHighlightAdjacentMatchOptions extends IHighlightMatchOptions {
+  /**
+   * What should be used as an anchor when searching for adjacent match.
+   * Defaults to `'auto'`.
+   */
+  from?: SearchStartAnchor;
+}
 
 /**
  * Search provider for editors.
@@ -167,7 +210,7 @@ export abstract class EditorSearchProvider<
   }
 
   /**
-   * Set whether search should be limitted to specified selection.
+   * Set whether search should be limitted to specified text selection.
    */
   async setSearchSelection(selection: CodeEditor.IRange | null): Promise<void> {
     if (this._inSelection === selection) {
@@ -176,6 +219,20 @@ export abstract class EditorSearchProvider<
     this._inSelection = selection;
     await this.updateCodeMirror(this.model.sharedModel.getSource());
     this._stateChanged.emit();
+  }
+
+  /**
+   * Set whether user selection should be protected from modifications.
+   *
+   * If disabled, the selection will be updated on search and on editor focus
+   * to cover the current match. We need to protect selection from modifications
+   * for both: search in text and search in cells; since `setSearchSelection`
+   * is only telling us about search in text, we need to have an additional
+   * way to signal that either search in text or in cells is active, or for
+   * any other reason selection range should be protected.
+   */
+  setProtectSelection(v: boolean) {
+    this.cmHandler.protectSelection = v;
   }
 
   /**
@@ -211,18 +268,17 @@ export abstract class EditorSearchProvider<
    */
   async highlightNext(
     loop = true,
-    fromCursor = false
+    options?: IHighlightAdjacentMatchOptions
   ): Promise<ISearchMatch | undefined> {
     if (this.matchesCount === 0 || !this.isActive) {
       this.currentIndex = null;
     } else {
-      // This starts from the cursor position if `fromCursor` is true
-      let match = await this.cmHandler.highlightNext(fromCursor);
+      let match = await this.cmHandler.highlightNext(options);
       if (match) {
         this.currentIndex = this.cmHandler.currentIndex;
       } else {
         // Note: the loop logic is only used in single-editor (e.g. file editor)
-        // provider sub-classes, notebook has it's own loop logic and ignores
+        // provider sub-classes, notebook has its own loop logic and ignores
         // `currentIndex` as set here.
         this.currentIndex = loop ? 0 : null;
       }
@@ -239,13 +295,12 @@ export abstract class EditorSearchProvider<
    */
   async highlightPrevious(
     loop = true,
-    fromCursor = false
+    options?: IHighlightAdjacentMatchOptions
   ): Promise<ISearchMatch | undefined> {
     if (this.matchesCount === 0 || !this.isActive) {
       this.currentIndex = null;
     } else {
-      // This starts from the cursor position if `fromCursor` is true
-      let match = await this.cmHandler.highlightPrevious(fromCursor);
+      let match = await this.cmHandler.highlightPrevious(options);
       if (match) {
         this.currentIndex = this.cmHandler.currentIndex;
       } else {
@@ -264,9 +319,9 @@ export abstract class EditorSearchProvider<
    *
    * The caller of this method is expected to call `highlightNext` if after
    * calling `replaceCurrentMatch()` attribute `this.currentIndex` is null.
-   * It is necesary to let the caller handle highlighting because this
+   * It is necessary to let the caller handle highlighting because this
    * method is used in composition pattern (search engine of notebook cells)
-   * and highligthing on the composer (notebook) level needs to switch to next
+   * and highlighting on the composer (notebook) level needs to switch to next
    * engine (cell) with matches.
    *
    * @param newText The replacement text.
@@ -281,38 +336,64 @@ export abstract class EditorSearchProvider<
       return Promise.resolve(false);
     }
 
-    let occurred = false;
-
     if (
       this.currentIndex !== null &&
       this.currentIndex < this.cmHandler.matches.length
     ) {
       const match = this.getCurrentMatch();
-      // If cursor there is no match selected, highlight the next match
       if (!match) {
         this.currentIndex = null;
       } else {
-        this.cmHandler.matches.splice(this.currentIndex, 1);
-        this.currentIndex =
-          this.currentIndex < this.cmHandler.matches.length
-            ? Math.max(this.currentIndex - 1, 0)
-            : null;
         const substitutedText = options?.regularExpression
           ? match!.text.replace(this.query!, newText)
           : newText;
         const insertText = options?.preserveCase
           ? GenericSearchProvider.preserveCase(match.text, substitutedText)
           : substitutedText;
+
         this.model.sharedModel.updateSource(
           match!.position,
           match!.position + match!.text.length,
           insertText
         );
-        occurred = true;
+
+        // Regenerate the match list, then iterate through it.
+        return new Promise((resolve, reject) => {
+          this.updateCodeMirror(this.model.sharedModel.getSource())
+            .then(() => {
+              const allMatches = this.cmHandler.matches;
+              const positionAfterReplacement =
+                match!.position + insertText.length;
+              let nextMatchFound = false;
+              for (
+                let matchIdx = this.currentIndex || 0;
+                matchIdx < allMatches.length;
+                matchIdx++
+              ) {
+                if (allMatches[matchIdx].position >= positionAfterReplacement) {
+                  this.currentIndex = matchIdx;
+                  nextMatchFound = true;
+                  break;
+                }
+
+                // Move the highlight forward from the previous match, not looping.
+                void this.highlightNext(false, { from: 'previous-match' });
+              }
+              if (!nextMatchFound) {
+                this.currentIndex = null; // No more matches in this string
+              }
+              resolve(true);
+            })
+            .catch(err => {
+              const errorMessage = `Failed to regenerate match list: ${err}`;
+              console.error(errorMessage);
+              reject(errorMessage);
+            });
+        });
       }
     }
 
-    return Promise.resolve(occurred);
+    return Promise.resolve(false);
   }
 
   /**
@@ -405,7 +486,11 @@ export abstract class EditorSearchProvider<
           this.cmHandler.currentIndex === null &&
           this.cmHandler.matches.length > 0
         ) {
-          await this.cmHandler.highlightNext(true, false);
+          await this.cmHandler.highlightNext({
+            from: 'selection',
+            select: false,
+            scroll: false
+          });
         }
         this.currentIndex = this.cmHandler.currentIndex;
       } else {
@@ -452,9 +537,9 @@ interface IEffectValue {
  *
  * **NOTES:**
  * - to retain the selection visibility `drawSelection` extension is needed.
- * - highlighting starts from the cursor (if editor is focused, cursor moved,
- *   or `fromCursor` argument is set to `true`), or from last "current" match
- *   otherwise.
+ * - highlighting starts from the cursor (if editor is focused and `from` is set
+ *   to `'auto'`, cursor moved, or `from` argument is set to `'selection'` or
+ *   `'selection-start'`), or from last "current" match otherwise.
  * - `currentIndex` is the (readonly) source of truth for the current match.
  */
 export class CodeMirrorSearchHighlighter {
@@ -495,6 +580,8 @@ export class CodeMirrorSearchHighlighter {
           if (ef.is(this._highlightEffect)) {
             const e = ef as StateEffect<IEffectValue>;
             if (e.value.matches.length) {
+              // Note: nesting will vary; sometimes `.cm-searching` will be
+              // inside `.jp-current-match`, sometime the other way round.
               highlights = highlights.update({
                 add: e.value.matches.map(m =>
                   this._highlightMark.range(
@@ -525,6 +612,13 @@ export class CodeMirrorSearchHighlighter {
       },
       provide: f => EditorView.decorations.from(f)
     });
+
+    this._domEventHandlers = EditorView.domEventHandlers({
+      focus: () => {
+        // Set cursor on active match when editor gets focused.
+        this._selectCurrentMatch();
+      }
+    });
   }
 
   /**
@@ -548,10 +642,21 @@ export class CodeMirrorSearchHighlighter {
     ) {
       this._currentIndex = this._matches.length > 0 ? 0 : null;
     }
-    this._highlightCurrentMatch(true);
+    this._highlightCurrentMatch({ select: false });
   }
 
   private _current: ISearchMatch | null = null;
+
+  /**
+   * Whether the cursor/selection should not be modified.
+   */
+  get protectSelection(): boolean {
+    return this._protectSelection;
+  }
+  set protectSelection(v: boolean) {
+    this._protectSelection = v;
+  }
+  private _protectSelection: boolean;
 
   /**
    * Clear all highlighted matches
@@ -583,11 +688,10 @@ export class CodeMirrorSearchHighlighter {
    * @returns The next match if available
    */
   highlightNext(
-    fromCursor = false,
-    doNotModifySelection = false
+    options?: IHighlightAdjacentMatchOptions
   ): Promise<ISearchMatch | undefined> {
-    this._currentIndex = this._findNext(false, fromCursor);
-    this._highlightCurrentMatch(doNotModifySelection);
+    this._currentIndex = this._findNext(false, options?.from ?? 'auto');
+    this._highlightCurrentMatch(options);
     return Promise.resolve(
       this._currentIndex !== null
         ? this._matches[this._currentIndex]
@@ -600,9 +704,11 @@ export class CodeMirrorSearchHighlighter {
    *
    * @returns The previous match if available
    */
-  highlightPrevious(fromCursor = false): Promise<ISearchMatch | undefined> {
-    this._currentIndex = this._findNext(true, fromCursor);
-    this._highlightCurrentMatch();
+  highlightPrevious(
+    options?: IHighlightAdjacentMatchOptions
+  ): Promise<ISearchMatch | undefined> {
+    this._currentIndex = this._findNext(true, options?.from ?? 'auto');
+    this._highlightCurrentMatch(options);
     return Promise.resolve(
       this._currentIndex !== null
         ? this._matches[this._currentIndex]
@@ -623,11 +729,24 @@ export class CodeMirrorSearchHighlighter {
       if (this._currentIndex !== null) {
         this._highlightCurrentMatch();
       }
+      this._cm.editor.dispatch({
+        effects: StateEffect.appendConfig.of(this._domEventHandlers)
+      });
       this._refresh();
     }
   }
 
-  private _selectCurrentMatch(): void {
+  private _selectCurrentMatch(scroll = true): void {
+    // This method has two responsibilities:
+    // 1) Scroll the current match into the view - useful for long lines,
+    //    and file editors with more lines that fit on the screen
+    // 2) When user has focus on the editor (not search box) and presses
+    //    ctrl + g/ctrl + shift + g to jump to next match they want their
+    //    cursor to jump too.
+    // We execute (1) and (2) together as CodeMirror has a special code path
+    // to handle both in a single dispatch.
+    // The (2) case is inapplicable to search in selection mode, as it would
+    // invalidate the query selection, so in that case we only execute (1).
     const match = this._current;
     if (!match) {
       return;
@@ -635,24 +754,35 @@ export class CodeMirrorSearchHighlighter {
     if (!this._cm) {
       return;
     }
-    const selection = this._cm.editor.state.selection.main;
-    if (
-      selection.from === match.position &&
-      selection.to === match.position + match.text.length
-    ) {
-      return;
-    }
     const cursor = {
       anchor: match.position,
       head: match.position + match.text.length
     };
-    this._cm.editor.dispatch({
-      selection: cursor,
-      scrollIntoView: true
-    });
+    const selection = this._cm.editor.state.selection.main;
+    if (
+      (selection.from === match.position &&
+        selection.to === match.position + match.text.length) ||
+      this._protectSelection
+    ) {
+      // Correct selection is already set or search is restricted to selection:
+      // scroll without changing the selection.
+      if (scroll) {
+        this._cm.editor.dispatch({
+          effects: EditorView.scrollIntoView(
+            EditorSelection.range(cursor.anchor, cursor.head)
+          )
+        });
+        return;
+      }
+    } else {
+      this._cm.editor.dispatch({
+        selection: cursor,
+        scrollIntoView: scroll
+      });
+    }
   }
 
-  private _highlightCurrentMatch(doNotModifySelection = false): void {
+  private _highlightCurrentMatch(options?: IHighlightMatchOptions): void {
     if (!this._cm) {
       // no-op
       return;
@@ -662,12 +792,14 @@ export class CodeMirrorSearchHighlighter {
     if (this._currentIndex !== null) {
       const match = this.matches[this._currentIndex];
       this._current = match;
-      // Do not change selection/scroll if user is selecting
-      if (!doNotModifySelection) {
+      // We do not change selection nor scroll if:
+      // - user is selecting text,
+      // - document was modified
+      if (options?.select ?? true) {
         if (this._cm.hasFocus()) {
           // If editor is focused we actually set the cursor on the match.
-          this._selectCurrentMatch();
-        } else {
+          this._selectCurrentMatch(options?.scroll ?? true);
+        } else if (options?.scroll ?? true) {
           // otherwise we just scroll to preserve the selection.
           this._cm.editor.dispatch({
             effects: EditorView.scrollIntoView(match.position)
@@ -694,27 +826,37 @@ export class CodeMirrorSearchHighlighter {
 
     if (!this._cm!.state.field(this._highlightField, false)) {
       effects.push(StateEffect.appendConfig.of([this._highlightField]));
-      // set cursor on active match when editor gets focused
-      const focusExtension = EditorView.domEventHandlers({
-        focus: () => {
-          this._selectCurrentMatch();
-        }
-      });
-      effects.push(StateEffect.appendConfig.of([focusExtension]));
     }
     this._cm!.editor.dispatch({ effects });
   }
 
-  private _findNext(reverse: boolean, fromCursor = false): number | null {
+  private _findNext(
+    reverse: boolean,
+    from: SearchStartAnchor = 'auto'
+  ): number | null {
     if (this._matches.length === 0) {
       // No-op
       return null;
     }
 
+    // If the editor has not be instantiated yet (e.g. a cell that has not yet be seen in the viewport),
+    // force the behavior
+    if (!this._cm && !['previous-match', 'start'].includes(from)) {
+      from = 'previous-match';
+    }
+
     let lastPosition = 0;
-    if (this._cm!.hasFocus() || fromCursor) {
+    if (
+      (from === 'auto' && (this._cm?.hasFocus() ?? false)) ||
+      from === 'selection'
+    ) {
       const cursor = this._cm!.state.selection.main;
       lastPosition = reverse ? cursor.anchor : cursor.head;
+    } else if (from === 'selection-start') {
+      const cursor = this._cm!.state.selection.main;
+      lastPosition = Math.min(cursor.anchor, cursor.head);
+    } else if (from === 'start') {
+      lastPosition = 0;
     } else if (this._current) {
       lastPosition = reverse
         ? this._current.position
@@ -722,7 +864,10 @@ export class CodeMirrorSearchHighlighter {
     }
     if (lastPosition === 0 && reverse && this.currentIndex === null) {
       // The default position is (0, 0) but we want to start from the end in that case
-      lastPosition = this._cm!.doc.length;
+      // Fallback to the end of the latest match if the editor is not instantiated
+      lastPosition =
+        this._cm?.doc.length ??
+        endLastMatch(this._matches[this._matches.length - 1]);
     }
 
     const position = lastPosition;
@@ -748,6 +893,10 @@ export class CodeMirrorSearchHighlighter {
     }
 
     return found;
+
+    function endLastMatch(lastMatch?: ISearchMatch): number {
+      return lastMatch ? lastMatch.position + lastMatch.text.length : 0;
+    }
   }
 
   private _cm: CodeMirrorEditor | null;
@@ -757,6 +906,7 @@ export class CodeMirrorSearchHighlighter {
   private _highlightMark: Decoration;
   private _currentMark: Decoration;
   private _highlightField: StateField<DecorationSet>;
+  private _domEventHandlers: Extension;
 }
 
 /**

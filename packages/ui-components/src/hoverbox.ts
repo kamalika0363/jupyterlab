@@ -33,7 +33,7 @@ export namespace HoverBox {
      * coordinate position, which can be retrieved via calling the
      * `getCoordinateForPosition` method.
      */
-    anchor: DOMRect;
+    anchor: IAnchor;
 
     /**
      * The node that hosts the anchor.
@@ -124,6 +124,12 @@ export namespace HoverBox {
   }
 
   /**
+   * An interface describing anchor coordinates.
+   */
+  export interface IAnchor
+    extends Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom'> {}
+
+  /**
    * Set the visible dimensions of a hovering box anchored to an editor cursor.
    *
    * @param options - The hover box geometry calculation options.
@@ -183,7 +189,7 @@ export namespace HoverBox {
 
     // Make sure the box ought to be visible.
     const withinBounds =
-      maxHeight > minHeight &&
+      maxHeight >= minHeight &&
       (spaceBelow >= minHeight || spaceAbove >= minHeight);
 
     if (!withinBounds) {
@@ -230,9 +236,10 @@ export namespace HoverBox {
     let rect = node.getBoundingClientRect();
 
     // Move left to fit in the window.
-    const right = rect.right;
+    let right = rect.right;
     if (right > window.innerWidth) {
       left -= right - window.innerWidth;
+      right = window.innerWidth;
       node.style.left = `${Math.ceil(left)}px`;
     }
 

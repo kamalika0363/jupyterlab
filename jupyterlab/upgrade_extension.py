@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Optional
 
 try:
     import tomllib
@@ -20,19 +21,19 @@ except ImportError:
 from pathlib import Path
 
 try:
-    from cookiecutter.main import cookiecutter
-except ImportError:
-    msg = "Please install cookiecutter"
+    import copier
+except ModuleNotFoundError:
+    msg = "Please install copier; you can use `pip install jupyterlab[upgrade-extension]`"
     raise RuntimeError(msg) from None
-
-
-DEFAULT_COOKIECUTTER_BRANCH = "4.0"
 
 # List of files recommended to be overridden
 RECOMMENDED_TO_OVERRIDE = [
     ".github/workflows/binder-on-pr.yml",
     ".github/workflows/build.yml",
     ".github/workflows/check-release.yml",
+    ".github/workflows/enforce-label.yml",
+    ".github/workflows/prep-release.yml",
+    ".github/workflows/publish-release.yml",
     ".github/workflows/update-integration-tests.yml",
     "binder/postBuild",
     ".eslintignore",
@@ -59,20 +60,20 @@ JUPYTER_SERVER_REQUIREMENT = re.compile("^jupyter_server([^\\w]|$)")
 
 
 def update_extension(  # noqa
-    target: str, branch: str = DEFAULT_COOKIECUTTER_BRANCH, interactive: bool = True
+    target: str, vcs_ref: Optional[str] = None, interactive: bool = True
 ) -> None:
     """Update an extension to the current JupyterLab
 
     target: str
         Path to the extension directory containing the extension
-    branch: str [default: DEFAULT_COOKIECUTTER_BRANCH]
-        Template branch to checkout
+    vcs_ref: str [default: None]
+        Template vcs_ref to checkout
     interactive: bool [default: true]
         Whether to ask before overwriting content
 
     """
     # Input is a directory with a package.json or the current directory
-    # Use the cookiecutter as the source
+    # Use the extension template as the source
     # Pull in the relevant config
     # Pull in the Python parts if possible
     # Pull in the scripts if possible
@@ -96,22 +97,27 @@ def update_extension(  # noqa
     if python_name is None:
         if setup_file.exists():
             python_name = (
-                subprocess.check_output([sys.executable, "setup.py", "--name"], cwd=target)
+                subprocess.check_output(
+                    [sys.executable, "setup.py", "--name"],  # noqa: S603
+                    cwd=target,
+                )
                 .decode("utf8")
                 .strip()
             )
         else:
             python_name = data["name"]
             if "@" in python_name:
-                python_name = python_name[1:].replace("/", "_").replace("-", "_")
+                python_name = python_name[1:]
+            # Clean up the name to be valid package module name
+        python_name = python_name.replace("/", "_").replace("-", "_")
 
     output_dir = target / "_temp_extension"
     if output_dir.exists():
         shutil.rmtree(output_dir)
 
-    # Build up the cookiecutter args and run the cookiecutter
+    # Build up the template answers and run the template engine
     author = data.get("author", "<author_name>")
-    author_email = "<author_email>"
+    author_email = ""
     if isinstance(author, dict):
         author_name = author.get("name", "<author_name>")
         author_email = author.get("email", author_email)
@@ -137,30 +143,19 @@ def update_extension(  # noqa
         "labextension_name": data["name"],
         "python_name": python_name,
         "project_short_description": data.get("description", "<description>"),
-        "has_settings": "y" if data.get("jupyterlab", {}).get("schemaDir", "") else "n",
-        "has_binder": "y" if (target / "binder").exists() else "n",
-        "test": "y" if has_test else "n",
+        "has_settings": bool(data.get("jupyterlab", {}).get("schemaDir", "")),
+        "has_binder": bool((target / "binder").exists()),
+        "test": bool(has_test),
         "repository": data.get("repository", {}).get("url", "<repository"),
     }
 
-    template = "https://github.com/jupyterlab/extension-cookiecutter-ts"
-    cookiecutter(
-        template=template,
-        checkout=branch,
-        output_dir=output_dir,
-        extra_context=extra_context,
-        no_input=not interactive,
-    )
-
-    for element in output_dir.glob("*"):
-        python_name = element.name
-        break
-
-    # hoist the output up one level
-    shutil.move(output_dir / python_name, output_dir / "_temp")
-    for filename in (output_dir / "_temp").glob("*"):
-        shutil.move(filename, output_dir / filename.name)
-    shutil.rmtree(output_dir / "_temp")
+    template = "https://github.com/jupyterlab/extension-template"
+    if tuple(copier.__version__.split(".")) < ("8", "0", "0"):
+        copier.run_auto(template, output_dir, vcs_ref=vcs_ref, data=extra_context, defaults=True)
+    else:
+        copier.run_copy(
+            template, output_dir, vcs_ref=vcs_ref, data=extra_context, defaults=True, unsafe=True
+        )
 
     # From the created package.json grab the devDependencies
     with (output_dir / "package.json").open() as fid:
@@ -182,11 +177,31 @@ def update_extension(  # noqa
             data["scripts"][key] = value
         if "install-ext" in data["scripts"]:
             del data["scripts"]["install-ext"]
+        if "prepare" in data["scripts"]:
+            del data["scripts"]["prepare"]
     else:
         warnings.append("package.json scripts must be updated manually")
 
     # Set the output directory
     data["jupyterlab"]["outputDir"] = temp_data["jupyterlab"]["outputDir"]
+
+    # Set linters
+    ## Map package.json key to previous config file
+    linters = {
+        "eslintConfig": ".eslintrc.js",
+        "eslintIgnore": ".eslintignore",
+        "prettier": ".prettierrc",
+        "stylelint": ".stylelintrc",
+    }
+
+    for key, file in linters.items():
+        if key in temp_data:
+            data[key] = temp_data[key]
+
+            linter_file = target / file
+            if linter_file.exists():
+                linter_file.unlink()
+                warnings.append(f"DELETED {file}")
 
     # Look for resolutions in JupyterLab metadata and upgrade those as well
     root_jlab_package = files("jupyterlab").joinpath("staging/package.json")
@@ -223,7 +238,7 @@ def update_extension(  # noqa
     # At the end, list the files that were: added, overridden, skipped
     for p in output_dir.rglob("*"):
         relpath = p.relative_to(output_dir)
-        if relpath.name == "package.json":
+        if str(relpath) == "package.json":
             continue
         if p.is_dir():
             continue
@@ -256,7 +271,7 @@ def update_extension(  # noqa
             try:
                 import tomli_w
             except ImportError:
-                msg = "To update pyproject.toml, you need to install tomli_w"
+                msg = "To update pyproject.toml, you need to install tomli-w"
                 print(msg)
             else:
                 config = configparser.ConfigParser()
@@ -267,7 +282,7 @@ def update_extension(  # noqa
                 pyproject = tomllib.loads(pyproject_file.read_text())
 
                 # Backport requirements
-                requirements_raw = config.get('options', 'install_requires', fallback=None)
+                requirements_raw = config.get("options", "install_requires", fallback=None)
                 if requirements_raw is not None:
                     requirements = list(
                         filter(
@@ -275,14 +290,16 @@ def update_extension(  # noqa
                             requirements_raw.splitlines(),
                         )
                     )
+                else:
+                    requirements = []
 
                 pyproject["project"]["dependencies"] = (
                     pyproject["project"].get("dependencies", []) + requirements
                 )
 
                 # Backport extras
-                if config.has_section('options.extras_require'):
-                    for extra, deps_raw in config.items('options.extras_require'):
+                if config.has_section("options.extras_require"):
+                    for extra, deps_raw in config.items("options.extras_require"):
                         deps = list(filter(lambda r: r, deps_raw.splitlines()))
                         if extra in pyproject["project"].get("optional-dependencies", {}):
                             if pyproject["project"].get("optional-dependencies") is None:
@@ -315,10 +332,16 @@ if __name__ == "__main__":
 
     parser.add_argument("path", action="store", type=str, help="the target path")
 
-    parser.add_argument(
-        "--branch", help="the template branch to checkout", default=DEFAULT_COOKIECUTTER_BRANCH
-    )
+    parser.add_argument("--vcs-ref", help="the template hash to checkout", default=None)
 
     args = parser.parse_args()
 
-    update_extension(args.path, args.branch, args.no_input is False)
+    answer_file = Path(args.path) / ".copier-answers.yml"
+
+    if answer_file.exists():
+        msg = "This script won't do anything for copier template, instead execute in your extension directory:\n\n    copier update"
+        if tuple(copier.__version__.split(".")) >= ("8", "0", "0"):
+            msg += " --UNSAFE"
+        print(msg)
+    else:
+        update_extension(args.path, args.vcs_ref, args.no_input is False)

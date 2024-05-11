@@ -9,6 +9,7 @@ import { ITranslator } from '@jupyterlab/translation';
 import { JSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 import { ISignal, Signal } from '@lumino/signaling';
+import { IEditorMimeTypeService } from './mimetype';
 
 /**
  * A namespace for code editors.
@@ -52,7 +53,8 @@ export namespace CodeEditor {
   /**
    * An interface describing editor state coordinates.
    */
-  export interface ICoordinate extends DOMRectReadOnly {}
+  export interface ICoordinate
+    extends Pick<DOMRectReadOnly, 'left' | 'right' | 'top' | 'bottom'> {}
 
   /**
    * A range.
@@ -163,7 +165,8 @@ export namespace CodeEditor {
       // Track if we need to dispose the model or not.
       this.standaloneModel = typeof options.sharedModel === 'undefined';
       this.sharedModel = options.sharedModel ?? new YFile();
-      this._mimeType = options.mimeType ?? 'text/plain';
+      this._mimeType =
+        options.mimeType ?? IEditorMimeTypeService.defaultMimeType;
     }
 
     /**
@@ -233,7 +236,7 @@ export namespace CodeEditor {
 
     private _isDisposed = false;
     private _selections = new ObservableMap<ITextSelection[]>();
-    private _mimeType = 'text/plain';
+    private _mimeType = IEditorMimeTypeService.defaultMimeType;
     private _mimeTypeChanged = new Signal<this, IChangedArgs<string>>(this);
   }
 
@@ -255,11 +258,15 @@ export namespace CodeEditor {
      * Set the primary position of the cursor.
      *
      * @param position - The new primary position.
+     * @param options - Adjustment options allowing to disable scrolling.
      *
      * #### Notes
      * This will remove any secondary cursors.
      */
-    setCursorPosition(position: IPosition): void;
+    setCursorPosition(
+      position: IPosition,
+      options?: { scroll?: boolean }
+    ): void;
 
     /**
      * Returns the primary selection, never `null`.
@@ -456,7 +463,7 @@ export namespace CodeEditor {
      *
      * @returns The coordinates of the position.
      */
-    getCoordinateForPosition(position: IPosition): ICoordinate;
+    getCoordinateForPosition(position: IPosition): ICoordinate | null;
 
     /**
      * Get the cursor position given window coordinates.

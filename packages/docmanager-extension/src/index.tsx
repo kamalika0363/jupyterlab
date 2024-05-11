@@ -19,6 +19,7 @@ import {
   ICommandPalette,
   InputDialog,
   ISessionContextDialogs,
+  Notification,
   ReactWidget,
   SessionContextDialogs,
   showDialog,
@@ -30,6 +31,7 @@ import {
   DocumentManager,
   IDocumentManager,
   IDocumentWidgetOpener,
+  IRecentsManager,
   PathStatus,
   renameDialog,
   SavingStatus
@@ -46,11 +48,12 @@ import {
 import { saveIcon } from '@jupyterlab/ui-components';
 import { some } from '@lumino/algorithm';
 import { CommandRegistry } from '@lumino/commands';
-import { JSONExt } from '@lumino/coreutils';
+import { JSONExt, ReadonlyPartialJSONObject } from '@lumino/coreutils';
 import { IDisposable } from '@lumino/disposable';
 import { ISignal, Signal } from '@lumino/signaling';
 import { Widget } from '@lumino/widgets';
 import * as React from 'react';
+import { recentsManagerPlugin } from './recents';
 
 /**
  * The command IDs used by the document manager plugin.
@@ -100,6 +103,7 @@ const docManagerPluginId = '@jupyterlab/docmanager-extension:plugin';
  */
 const openerPlugin: JupyterFrontEndPlugin<IDocumentWidgetOpener> = {
   id: '@jupyterlab/docmanager-extension:opener',
+  description: 'Provides the widget opener.',
   autoStart: true,
   provides: IDocumentWidgetOpener,
   activate: (app: JupyterFrontEnd) => {
@@ -134,6 +138,7 @@ const openerPlugin: JupyterFrontEndPlugin<IDocumentWidgetOpener> = {
  */
 const contextsPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/docmanager-extension:contexts',
+  description: 'Adds the handling of opened documents dirty state.',
   autoStart: true,
   requires: [IDocumentManager, IDocumentWidgetOpener],
   optional: [ILabStatus],
@@ -162,16 +167,24 @@ const contextsPlugin: JupyterFrontEndPlugin<void> = {
  */
 const manager: JupyterFrontEndPlugin<IDocumentManager> = {
   id: '@jupyterlab/docmanager-extension:manager',
+  description: 'Provides the document manager.',
   provides: IDocumentManager,
   requires: [IDocumentWidgetOpener],
-  optional: [ITranslator, ILabStatus, ISessionContextDialogs, JupyterLab.IInfo],
+  optional: [
+    ITranslator,
+    ILabStatus,
+    ISessionContextDialogs,
+    JupyterLab.IInfo,
+    IRecentsManager
+  ],
   activate: (
     app: JupyterFrontEnd,
     widgetOpener: IDocumentWidgetOpener,
     translator_: ITranslator | null,
     status: ILabStatus | null,
     sessionDialogs_: ISessionContextDialogs | null,
-    info: JupyterLab.IInfo | null
+    info: JupyterLab.IInfo | null,
+    recentsManager: IRecentsManager | null
   ) => {
     const { serviceManager: manager, docRegistry: registry } = app;
     const translator = translator_ ?? nullTranslator;
@@ -192,7 +205,8 @@ const manager: JupyterFrontEndPlugin<IDocumentManager> = {
           return info.isConnected;
         }
         return true;
-      }
+      },
+      recentsManager: recentsManager ?? undefined
     });
 
     return docManager;
@@ -200,10 +214,11 @@ const manager: JupyterFrontEndPlugin<IDocumentManager> = {
 };
 
 /**
- * The default document manager provider.
+ * The default document manager provider commands and settings.
  */
 const docManagerPlugin: JupyterFrontEndPlugin<void> = {
   id: docManagerPluginId,
+  description: 'Adds commands and settings to the document manager.',
   autoStart: true,
   requires: [IDocumentManager, IDocumentWidgetOpener, ISettingRegistry],
   optional: [ITranslator, ICommandPalette, ILabShell],
@@ -375,6 +390,7 @@ Available file types:
  */
 export const savingStatusPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/docmanager-extension:saving-status',
+  description: 'Adds a saving status indicator.',
   autoStart: true,
   requires: [IDocumentManager, ILabShell],
   optional: [ITranslator, IStatusBar],
@@ -414,6 +430,7 @@ export const savingStatusPlugin: JupyterFrontEndPlugin<void> = {
  */
 export const pathStatusPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/docmanager-extension:path-status',
+  description: 'Adds a file path indicator in the status bar.',
   autoStart: true,
   requires: [IDocumentManager, ILabShell],
   optional: [IStatusBar],
@@ -448,6 +465,7 @@ export const pathStatusPlugin: JupyterFrontEndPlugin<void> = {
  */
 export const downloadPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/docmanager-extension:download',
+  description: 'Adds command to download files.',
   autoStart: true,
   requires: [IDocumentManager],
   optional: [ITranslator, ICommandPalette],
@@ -483,6 +501,10 @@ export const downloadPlugin: JupyterFrontEndPlugin<void> = {
       }
     });
 
+    app.shell.currentChanged?.connect(() => {
+      app.commands.notifyCommandChanged(CommandIDs.download);
+    });
+
     const category = trans.__('File Operations');
     if (palette) {
       palette.addItem({ command: CommandIDs.download, category });
@@ -501,6 +523,7 @@ export const downloadPlugin: JupyterFrontEndPlugin<void> = {
  */
 export const openBrowserTabPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/docmanager-extension:open-browser-tab',
+  description: 'Adds command to open a browser tab.',
   autoStart: true,
   requires: [IDocumentManager],
   optional: [ITranslator],
@@ -547,7 +570,8 @@ const plugins: JupyterFrontEndPlugin<any>[] = [
   savingStatusPlugin,
   downloadPlugin,
   openBrowserTabPlugin,
-  openerPlugin
+  openerPlugin,
+  recentsManagerPlugin
 ];
 export default plugins;
 
@@ -561,7 +585,7 @@ export namespace ToolbarItems {
    */
   export function createSaveButton(
     commands: CommandRegistry,
-    fileChanged: ISignal<any, Contents.IModel>
+    fileChanged: ISignal<any, Omit<Contents.IModel, 'content'>>
   ): Widget {
     return addCommandToolbarButtonClass(
       ReactWidget.create(
@@ -636,6 +660,13 @@ function addCommands(
     }
     const context = docManager.contextForWidget(currentWidget);
     return !!context?.contentsModel?.writable;
+  };
+
+  const readonlyNotification = (contextPath: string) => {
+    return Notification.warning(
+      trans.__(`%1 is read-only. Use "Save as…" instead.`, contextPath),
+      { autoClose: 5000 }
+    );
   };
 
   // If inside a rich application like JupyterLab, add additional functionality.
@@ -786,7 +817,10 @@ function addCommands(
           body: new RevertConfirmWidget(targetCheckpoint, trans, type),
           buttons: [
             Dialog.cancelButton(),
-            Dialog.warnButton({ label: trans.__('Revert') })
+            Dialog.warnButton({
+              label: trans.__('Revert'),
+              ariaLabel: trans.__('Revert to Checkpoint')
+            })
           ]
         }).then(result => {
           if (context.isDisposed) {
@@ -813,6 +847,11 @@ function addCommands(
           'In collaborative mode, the document is saved automatically after every change'
         );
       }
+      if (!isWritable()) {
+        return trans.__(
+          `Document is read-only. "Save" is disabled; use "Save as…" instead`
+        );
+      }
     }
 
     return trans.__('Save and create checkpoint');
@@ -824,12 +863,21 @@ function addCommands(
     label: () => trans.__('Save %1', fileType(shell.currentWidget, docManager)),
     caption,
     icon: args => (args.toolbar ? saveIcon : undefined),
-    isEnabled: isWritable,
-    execute: async () => {
+    isEnabled: args => {
+      if (args._luminoEvent) {
+        return (args._luminoEvent as ReadonlyPartialJSONObject).type ===
+          'keybinding'
+          ? true
+          : isWritable();
+      } else {
+        return isWritable();
+      }
+    },
+    execute: async args => {
       // Checks that shell.currentWidget is valid:
+      const widget = shell.currentWidget;
+      const context = docManager.contextForWidget(widget!);
       if (isEnabled()) {
-        const widget = shell.currentWidget;
-        const context = docManager.contextForWidget(widget!);
         if (!context) {
           return showDialog({
             title: trans.__('Cannot Save'),
@@ -840,13 +888,21 @@ function addCommands(
           if (saveInProgress.has(context)) {
             return;
           }
-
-          if (context.model.readOnly) {
-            return showDialog({
-              title: trans.__('Cannot Save'),
-              body: trans.__('Document is read-only'),
-              buttons: [Dialog.okButton()]
-            });
+          if (
+            !context.contentsModel?.writable &&
+            !context.model.collaborative
+          ) {
+            let type = (args._luminoEvent as ReadonlyPartialJSONObject)?.type;
+            if (args._luminoEvent && type === 'keybinding') {
+              readonlyNotification(context.path);
+              return;
+            } else {
+              return showDialog({
+                title: trans.__('Cannot Save'),
+                body: trans.__('Document is read-only'),
+                buttons: [Dialog.okButton()]
+              });
+            }
           }
 
           saveInProgress.add(context);
@@ -936,9 +992,13 @@ function addCommands(
       const paths = new Set<string>(); // Cache so we don't double save files.
       for (const widget of shell.widgets('main')) {
         const context = docManager.contextForWidget(widget);
-        if (context && !context.model.readOnly && !paths.has(context.path)) {
-          paths.add(context.path);
-          promises.push(context.save());
+        if (context && !paths.has(context.path)) {
+          if (context.contentsModel?.writable) {
+            paths.add(context.path);
+            promises.push(context.save());
+          } else {
+            readonlyNotification(context.path);
+          }
         }
       }
       return Promise.all(promises);
@@ -978,13 +1038,25 @@ function addCommands(
           }
         };
         docManager.services.contents.fileChanged.connect(onChange);
-        context
+        void context
           .saveAs()
           .finally(() =>
             docManager.services.contents.fileChanged.disconnect(onChange)
           );
       }
     }
+  });
+
+  app.shell.currentChanged?.connect(() => {
+    [
+      CommandIDs.reload,
+      CommandIDs.restoreCheckpoint,
+      CommandIDs.save,
+      CommandIDs.saveAll,
+      CommandIDs.saveAs
+    ].forEach(cmd => {
+      app.commands.notifyCommandChanged(cmd);
+    });
   });
 
   commands.addCommand(CommandIDs.toggleAutosave, {
@@ -1143,6 +1215,18 @@ function addLabCommands(
       await commands.execute('filebrowser:activate', { path: context.path });
       await commands.execute('filebrowser:go-to-path', { path: context.path });
     }
+  });
+
+  labShell.currentChanged.connect(() => {
+    [
+      CommandIDs.clone,
+      CommandIDs.rename,
+      CommandIDs.duplicate,
+      CommandIDs.del,
+      CommandIDs.showInFileBrowser
+    ].forEach(cmd => {
+      app.commands.notifyCommandChanged(cmd);
+    });
   });
 }
 

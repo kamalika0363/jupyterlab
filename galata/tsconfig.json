@@ -6,7 +6,7 @@
     "rootDir": "src",
     "module": "commonjs",
     "types": ["node"],
-    "lib": ["DOM", "DOM.iterable", "es2019.array"]
+    "lib": ["DOM", "DOM.iterable", "es2019.array", "esnext"]
   },
   "include": ["src/**/*"],
   "references": [
@@ -18,6 +18,9 @@
     },
     {
       "path": "../packages/coreutils"
+    },
+    {
+      "path": "../packages/debugger"
     },
     {
       "path": "../packages/docmanager"

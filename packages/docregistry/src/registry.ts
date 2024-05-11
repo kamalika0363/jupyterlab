@@ -491,9 +491,9 @@ export class DocumentRegistry implements IDisposable {
    * IWidgetFactoryOptions. This function can be used to override that after
    * the fact.
    *
-   * @param fileType: The name of the file type.
+   * @param fileType The name of the file type.
    *
-   * @param factory: The name of the factory.
+   * @param factory The name of the factory.
    *
    * #### Notes
    * If `factory` is undefined, then any override will be unset, and the
@@ -664,25 +664,35 @@ export class DocumentRegistry implements IDisposable {
   getFileTypeForModel(
     model: Partial<Contents.IModel>
   ): DocumentRegistry.IFileType {
+    let ft: DocumentRegistry.IFileType | null = null;
+    if (model.name || model.path) {
+      const name = model.name || PathExt.basename(model.path!);
+      const fts = this.getFileTypesForPath(name);
+      if (fts.length > 0) {
+        ft = fts[0];
+      }
+    }
     switch (model.type) {
       case 'directory':
+        if (ft !== null && ft.contentType === 'directory') {
+          return ft;
+        }
         return (
           find(this._fileTypes, ft => ft.contentType === 'directory') ||
           DocumentRegistry.getDefaultDirectoryFileType(this.translator)
         );
       case 'notebook':
+        if (ft !== null && ft.contentType === 'notebook') {
+          return ft;
+        }
         return (
           find(this._fileTypes, ft => ft.contentType === 'notebook') ||
           DocumentRegistry.getDefaultNotebookFileType(this.translator)
         );
       default:
         // Find the best matching extension.
-        if (model.name || model.path) {
-          const name = model.name || PathExt.basename(model.path!);
-          const fts = this.getFileTypesForPath(name);
-          if (fts.length > 0) {
-            return fts[0];
-          }
+        if (ft !== null) {
+          return ft;
         }
         return (
           this.getFileType('text') ||
@@ -876,7 +886,7 @@ export namespace DocumentRegistry {
     /**
      * A signal emitted when the contentsModel changes.
      */
-    fileChanged: ISignal<this, Contents.IModel>;
+    fileChanged: ISignal<this, Omit<Contents.IModel, 'content'>>;
 
     /**
      * A signal emitted on the start and end of a saving operation.
@@ -920,9 +930,9 @@ export namespace DocumentRegistry {
      *
      * #### Notes
      * This will be null until the context is 'ready'. Since we only store
-     * metadata here, the `.contents` attribute will always be empty.
+     * metadata here, the `content` attribute is removed.
      */
-    readonly contentsModel: Contents.IModel | null;
+    readonly contentsModel: Omit<Contents.IModel, 'content'> | null;
 
     /**
      * The url resolver for the context.
@@ -1406,6 +1416,17 @@ export namespace DocumentRegistry {
         displayName: trans.__('JSON File'),
         extensions: ['.json'],
         mimeTypes: ['application/json'],
+        icon: jsonIcon
+      },
+      {
+        name: 'jsonl',
+        displayName: trans.__('JSONLines File'),
+        extensions: ['.jsonl', '.ndjson'],
+        mimeTypes: [
+          'text/jsonl',
+          'application/jsonl',
+          'application/json-lines'
+        ],
         icon: jsonIcon
       },
       {

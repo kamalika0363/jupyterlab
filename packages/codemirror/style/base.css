@@ -14,6 +14,11 @@
   /* Changed to auto to autogrow */
 }
 
+/* Suppress automatic focus indicator outline */
+.cm-editor.cm-focused {
+  outline: unset;
+}
+
 .cm-editor pre {
   padding: 0 var(--jp-code-padding);
 }
@@ -28,7 +33,7 @@
 }
 
 /* When zoomed out 67% and 33% on a screen of 1440 width x 900 height */
-@media screen and (min-width: 2138px) and (max-width: 4319px) {
+@media screen and (width >= 2138px) and (width <= 4319px) {
   .jp-CodeMirrorEditor[data-type='inline'] .cm-cursor {
     border-left: var(--jp-code-cursor-width1) solid
       var(--jp-editor-cursor-color);
@@ -36,16 +41,21 @@
 }
 
 /* When zoomed out less than 33% */
-@media screen and (min-width: 4320px) {
+@media screen and (width >= 4320px) {
   .jp-CodeMirrorEditor[data-type='inline'] .cm-cursor {
     border-left: var(--jp-code-cursor-width2) solid
       var(--jp-editor-cursor-color);
   }
 }
 
-.cm-editor.jp-mod-readOnly .cm-cursor {
+/* stylelint-disable selector-max-class */
+
+/* We need all this classes for higher specificity to override CodeMirror's rule */
+.cm-editor.jp-mod-readOnly > .cm-scroller > .cm-cursorLayer .cm-cursor {
   display: none;
 }
+
+/* stylelint-enable selector-max-class */
 
 .jp-CollaboratorCursor {
   border-left: 5px solid transparent;
@@ -59,24 +69,29 @@
 
 .cm-searching,
 .cm-searching span {
+  /* `.cm-searching span`: we need to override syntax highlighting */
   background-color: var(--jp-search-unselected-match-background-color);
   color: var(--jp-search-unselected-match-color);
 }
 
-.cm-content .cm-searching::selection,
-.cm-content .cm-searching span::selection {
+.cm-searching::selection,
+.cm-searching span::selection {
   background-color: var(--jp-search-unselected-match-background-color);
   color: var(--jp-search-unselected-match-color);
 }
 
-.jp-current-match .cm-searching,
-.jp-current-match .cm-searching span {
+.jp-current-match > .cm-searching,
+.jp-current-match > .cm-searching span,
+.cm-searching > .jp-current-match,
+.cm-searching > .jp-current-match span {
   background-color: var(--jp-search-selected-match-background-color);
   color: var(--jp-search-selected-match-color);
 }
 
-.cm-content .jp-current-match .cm-searching::selection,
-.cm-content .jp-current-match .cm-searching span::selection {
+.jp-current-match > .cm-searching::selection,
+.jp-current-match > .cm-searching span::selection,
+.cm-searching > .jp-current-match::selection,
+.cm-searching > .jp-current-match span::selection {
   background-color: var(--jp-search-selected-match-background-color);
   color: var(--jp-search-selected-match-color);
 }

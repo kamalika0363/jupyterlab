@@ -13,9 +13,7 @@ test.use({
   tmpPath: 'workspace-test',
   waitForApplication: async ({ baseURL }, use, testInfo) => {
     const simpleWait = async (page: Page): Promise<void> => {
-      await page.waitForSelector('#jupyterlab-splash', {
-        state: 'detached'
-      });
+      await page.locator('#jupyterlab-splash').waitFor({ state: 'detached' });
     };
     void use(simpleWait);
   }
@@ -151,9 +149,11 @@ test.describe('Workspace', () => {
     ).toBeVisible();
 
     // Wait for the kernel to be ready so it does not unfocus the menu
-    await page.waitForSelector('text= | Idle');
+    await page.locator('text= | Idle').waitFor();
 
-    await expect(page.menu.getMenuItem(`Tabs>${mdFile}`)).toBeDefined();
+    const menuItem = await page.menu.getMenuItemLocator(`Tabs>${mdFile}`);
+    expect(menuItem).toBeDefined();
+    expect(menuItem).toBeNull();
   });
 
   test('should clone the default workspace', async ({ page, tmpPath }) => {
@@ -169,7 +169,7 @@ test.describe('Workspace', () => {
           /api\/workspaces/.test(response.request().url()) &&
           response.request().postDataJSON().data['terminal:1']
       ),
-      page.waitForSelector('[role="main"] >> .jp-Terminal'),
+      page.locator('[role="main"] >> .jp-Terminal').waitFor(),
       page.menu.clickMenuItem('File>New>Terminal')
     ]);
 
@@ -205,7 +205,7 @@ test.describe('Workspace', () => {
           /api\/workspaces/.test(response.request().url()) &&
           response.request().postDataJSON().data['terminal:1']
       ),
-      page.waitForSelector('[role="main"] >> .jp-Terminal'),
+      page.locator('[role="main"] >> .jp-Terminal').waitFor(),
       page.menu.clickMenuItem('File>New>Terminal')
     ]);
 
@@ -272,12 +272,30 @@ test.describe('Workspace in doc mode', () => {
             'running-sessions',
             '@jupyterlab/toc:plugin',
             'extensionmanager.main-view'
-          ]
+          ],
+          widgetStates: {
+            ['jp-running-sessions']: {
+              sizes: [0.25, 0.25, 0.25, 0.25],
+              expansionStates: [false, false, false, false]
+            },
+            ['extensionmanager.main-view']: {
+              sizes: [
+                0.3333333333333333, 0.3333333333333333, 0.3333333333333333
+              ],
+              expansionStates: [false, false, false]
+            }
+          }
         },
         right: {
           collapsed: true,
           visible: true,
-          widgets: []
+          widgets: ['jp-property-inspector', 'debugger-sidebar'],
+          widgetStates: {
+            ['jp-debugger-sidebar']: {
+              sizes: [0.2, 0.2, 0.2, 0.2, 0.2],
+              expansionStates: [false, false, false, false, false]
+            }
+          }
         },
         relativeSizes: [0.4, 0.6, 0],
         top: {

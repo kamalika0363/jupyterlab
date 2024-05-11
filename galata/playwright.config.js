@@ -14,9 +14,6 @@ module.exports = {
       testIgnore: '**/.ipynb_checkpoints/**',
       timeout: 90000,
       use: {
-        contextOptions: {
-          permissions: ['clipboard-read', 'clipboard-write']
-        },
         launchOptions: {
           // Force slow motion
           slowMo: 30
@@ -30,8 +27,13 @@ module.exports = {
     },
     {
       name: 'jupyterlab',
-      testMatch: 'test/jupyterlab/**',
-      testIgnore: '**/.ipynb_checkpoints/**'
+      testMatch: 'test/jupyterlab/**/*.test.ts',
+      testIgnore: '**/.ipynb_checkpoints/**',
+      use: {
+        contextOptions: {
+          permissions: ['clipboard-read', 'clipboard-write']
+        }
+      }
     }
   ],
   // Switch to 'always' to keep raw assets for all tests

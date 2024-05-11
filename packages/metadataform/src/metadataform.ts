@@ -335,19 +335,16 @@ export class MetadataFormWidget
   /**
    * Handle a change to the active cell metadata.
    */
-  protected onActiveCellMetadataChanged(msg: Message): void {
+  protected onActiveCellMetadataChanged(_: Message): void {
     if (!this._updatingMetadata && this.isVisible) this._update();
   }
 
-  protected onActiveNotebookPanelChanged(msg: Message): void {
-    // Do not use notebook metadata if model is null.
-    let notebook = this.notebookTools.activeNotebookPanel;
-    if (notebook === null || notebook.model === null) {
-      console.warn('Notebook model is null, its metadata cannot be updated.');
-      this._notebookModelNull = true;
-    } else {
-      this._notebookModelNull = false;
-    }
+  /**
+   * Handle when the active notebook panel changes.
+   */
+  protected onActiveNotebookPanelChanged(_: Message): void {
+    const notebook = this.notebookTools.activeNotebookPanel;
+    this._notebookModelNull = notebook === null || notebook.model === null;
     if (!this._updatingMetadata && this.isVisible) this._update();
   }
 
@@ -466,8 +463,8 @@ namespace Private {
    * Recursive function to clean the empty nested metadata before updating real metadata.
    * this function is called when a nested metadata is undefined (or default), so maybe some
    * object are now empty.
-   * @param metadataObject: PartialJSONObject representing the metadata to update.
-   * @param metadataKeysList: Array<string> of the undefined nested metadata.
+   * @param metadataObject PartialJSONObject representing the metadata to update.
+   * @param metadataKeysList Array<string> of the undefined nested metadata.
    * @returns PartialJSONObject without empty object.
    */
   export function deleteEmptyNested(

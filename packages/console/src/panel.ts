@@ -8,7 +8,7 @@ import {
   SessionContextDialogs
 } from '@jupyterlab/apputils';
 import { IEditorMimeTypeService } from '@jupyterlab/codeeditor';
-import { PathExt, Time, URLExt } from '@jupyterlab/coreutils';
+import { PathExt, Time } from '@jupyterlab/coreutils';
 import {
   IRenderMimeRegistry,
   RenderMimeRegistry
@@ -21,6 +21,7 @@ import { IDisposable } from '@lumino/disposable';
 import { Message } from '@lumino/messaging';
 import { Panel } from '@lumino/widgets';
 import { CodeConsole } from './widget';
+import type { IConsoleCellExecutor } from './tokens';
 
 /**
  * The class name added to console panels.
@@ -38,6 +39,7 @@ export class ConsolePanel extends MainAreaWidget<Panel> {
     super({ content: new Panel() });
     this.addClass(PANEL_CLASS);
     let {
+      executor,
       rendermime,
       mimeTypeService,
       path,
@@ -54,7 +56,7 @@ export class ConsolePanel extends MainAreaWidget<Panel> {
     const contentFactory = (this.contentFactory = options.contentFactory);
     const count = Private.count++;
     if (!path) {
-      path = URLExt.join(basePath || '', `console-${count}-${UUID.uuid4()}`);
+      path = PathExt.join(basePath || '', `console-${count}-${UUID.uuid4()}`);
     }
 
     sessionContext = this._sessionContext =
@@ -62,7 +64,7 @@ export class ConsolePanel extends MainAreaWidget<Panel> {
       new SessionContext({
         sessionManager: manager.sessions,
         specsManager: manager.kernelspecs,
-        path,
+        path: manager.contents.localPath(path),
         name: name || trans.__('Console %1', count),
         type: 'console',
         kernelPreference: options.kernelPreference,
@@ -76,6 +78,7 @@ export class ConsolePanel extends MainAreaWidget<Panel> {
     rendermime = rendermime.clone({ resolver });
 
     this.console = contentFactory.createConsole({
+      executor,
       rendermime,
       sessionContext: sessionContext,
       mimeTypeService,
@@ -189,6 +192,11 @@ export namespace ConsolePanel {
     contentFactory: IContentFactory;
 
     /**
+     * Console cell executor
+     */
+    executor?: IConsoleCellExecutor;
+
+    /**
      * The service manager used by the panel.
      */
     manager: ServiceManager.IManager;
@@ -283,7 +291,8 @@ export namespace ConsolePanel {
    * The console renderer token.
    */
   export const IContentFactory = new Token<IContentFactory>(
-    '@jupyterlab/console:IContentFactory'
+    '@jupyterlab/console:IContentFactory',
+    'A factory object that creates new code consoles. Use this if you want to create and host code consoles in your own UI elements.'
   );
 }
 

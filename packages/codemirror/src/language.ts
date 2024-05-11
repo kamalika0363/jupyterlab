@@ -16,6 +16,7 @@ import { highlightTree } from '@lezer/highlight';
 
 import { jupyterHighlightStyle } from './theme';
 import { IEditorLanguage, IEditorLanguageRegistry } from './token';
+import { pythonBuiltin } from './pythonBuiltin';
 
 /**
  * CodeMirror language registry
@@ -473,7 +474,10 @@ export namespace EditorLanguageRegistry {
         filename: /^(BUCK|BUILD)$/,
         async load() {
           const m = await import('@codemirror/lang-python');
-          return m.python();
+          return new LanguageSupport(
+            m.pythonLanguage,
+            pythonBuiltin(m.pythonLanguage)
+          );
         }
       },
       {
@@ -485,7 +489,10 @@ export namespace EditorLanguageRegistry {
           // to activate feature such as code folding.
           // return Promise.resolve(legacy(mkPython({ singleOperators: /\?/ })));
           const m = await import('@codemirror/lang-python');
-          return m.python();
+          return new LanguageSupport(
+            m.pythonLanguage,
+            pythonBuiltin(m.pythonLanguage)
+          );
         }
       },
       {
@@ -501,7 +508,7 @@ export namespace EditorLanguageRegistry {
       {
         name: 'SQL',
         displayName: trans.__('SQL'),
-        mime: 'text/x-sql',
+        mime: ['application/sql', 'text/x-sql'],
         extensions: ['sql'],
         load() {
           return sql('StandardSQL');
@@ -679,7 +686,7 @@ export namespace EditorLanguageRegistry {
       },
       {
         name: 'CoffeeScript',
-        displayName: trans.__('CoffeScript'),
+        displayName: trans.__('CoffeeScript'),
         alias: ['coffee', 'coffee-script'],
         mime: [
           'application/vnd.coffeescript',

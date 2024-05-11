@@ -18,16 +18,19 @@ import subprocess
 import sys
 import tarfile
 from copy import deepcopy
+from dataclasses import dataclass
 from glob import glob
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
+from typing import FrozenSet, Optional
 from urllib.error import URLError
 from urllib.request import Request, quote, urljoin, urlopen
 
 from jupyter_core.paths import jupyter_config_dir
 from jupyter_server.extension.serverextension import GREEN_ENABLED, GREEN_OK, RED_DISABLED, RED_X
 from jupyterlab_server.config import (
+    get_allowed_levels,
     get_federated_extensions,
     get_package_url,
     get_page_config,
@@ -189,7 +192,15 @@ def dedupe_yarn(path, logger=None):
     """
     had_dupes = (
         ProgressProcess(
-            ["node", YARN_PATH, "yarn-deduplicate", "-s", "fewer", "--fail"],
+            [
+                "node",
+                YARN_PATH,
+                "dlx",
+                "yarn-berry-deduplicate",
+                "-s",
+                "fewerHighest",
+                "--fail",
+            ],
             cwd=path,
             logger=logger,
         ).wait()
@@ -208,7 +219,7 @@ def ensure_node_modules(cwd, logger=None):
     """
     logger = _ensure_logger(logger)
     yarn_proc = ProgressProcess(
-        ["node", YARN_PATH, "check", "--verify-tree"], cwd=cwd, logger=logger
+        ["node", YARN_PATH, "--immutable", "--immutable-cache"], cwd=cwd, logger=logger
     )
     ret = yarn_proc.wait()
 
@@ -356,6 +367,8 @@ class AppOptions(HasTraits):
             " If false, perform a thorough check, which verifies extension contents."
         ),
     )
+
+    verbose = Bool(False, help="Increase verbosity level.")
 
     @default("logger")
     def _default_logger(self):
@@ -514,7 +527,7 @@ def get_app_info(app_options=None):
 
 
 def enable_extension(extension, app_options=None, level="sys_prefix"):
-    """Enable a JupyterLab extension.
+    """Enable a JupyterLab extension/plugin.
 
     Returns `True` if a rebuild is recommended, `False` otherwise.
     """
@@ -523,7 +536,7 @@ def enable_extension(extension, app_options=None, level="sys_prefix"):
 
 
 def disable_extension(extension, app_options=None, level="sys_prefix"):
-    """Disable a JupyterLab package.
+    """Disable a JupyterLab extension/plugin.
 
     Returns `True` if a rebuild is recommended, `False` otherwise.
     """
@@ -535,6 +548,18 @@ def check_extension(extension, installed=False, app_options=None):
     """Check if a JupyterLab extension is enabled or disabled."""
     handler = _AppHandler(app_options)
     return handler.check_extension(extension, installed)
+
+
+def lock_extension(extension, app_options=None, level="sys_prefix"):
+    """Lock a JupyterLab extension/plugin."""
+    handler = _AppHandler(app_options)
+    return handler.toggle_extension_lock(extension, True, level=level)
+
+
+def unlock_extension(extension, app_options=None, level="sys_prefix"):
+    """Unlock a JupyterLab extension/plugin."""
+    handler = _AppHandler(app_options)
+    return handler.toggle_extension_lock(extension, False, level=level)
 
 
 def build_check(app_options=None):
@@ -610,12 +635,26 @@ class _AppHandler:
         # Make a deep copy of the core data so we don't influence the original copy
         self.core_data = deepcopy(options.core_config._data)
         self.labextensions_path = options.labextensions_path
+        self.verbose = options.verbose
         self.kill_event = options.kill_event
         self.registry = options.registry
         self.skip_full_build_check = options.skip_full_build_check
 
         # Do this last since it relies on other attributes
         self.info = self._get_app_info()
+        # Migrate from 4.0 which did not have "locked" status
+        try:
+            self._maybe_mirror_disabled_in_locked(level="sys_prefix")
+        except (PermissionError, OSError):
+            try:
+                self.logger.info(
+                    "`sys_prefix` level settings are read-only, using `user` level for migration to `lockedExtensions`"
+                )
+                self._maybe_mirror_disabled_in_locked(level="user")
+            except (PermissionError, OSError):
+                self.logger.warning(
+                    "Both `sys_prefix` and `user` level settings are read-only, cannot auto-migrate `disabledExtensions` to `lockedExtensions`"
+                )
 
     def install_extension(self, extension, existing=None, pin=None):
         """Install an extension package into JupyterLab.
@@ -1045,7 +1084,7 @@ class _AppHandler:
 
         found = None
         for name, source in linked.items():
-            if name == path or source == path:
+            if path in {name, source}:
                 found = name
 
         if found:
@@ -1053,7 +1092,7 @@ class _AppHandler:
         else:
             local = config.setdefault("local_extensions", {})
             for name, source in local.items():
-                if name == path or source == path:
+                if path in {name, source}:
                     found = name
             if found:
                 del local[found]
@@ -1066,6 +1105,18 @@ class _AppHandler:
         self._write_build_config(config)
         return True
 
+    def _is_extension_locked(self, extension, level="sys_prefix", include_higher_levels=True):
+        app_settings_dir = osp.join(self.app_dir, "settings")
+        page_config = get_static_page_config(
+            app_settings_dir=app_settings_dir,
+            logger=self.logger,
+            level=level,
+            include_higher_levels=True,
+        )
+
+        locked = page_config.get("lockedExtensions", {})
+        return locked.get(extension, False)
+
     def toggle_extension(self, extension, value, level="sys_prefix"):
         """Enable or disable a lab extension.
 
@@ -1073,24 +1124,89 @@ class _AppHandler:
         """
         app_settings_dir = osp.join(self.app_dir, "settings")
 
+        # If extension is locked at a higher level, we don't toggle it.
+        # The highest level at which an extension can be locked is system,
+        # so we do not need to check levels above that one.
+        if level != "system":
+            allowed = get_allowed_levels()
+            if self._is_extension_locked(
+                extension, level=allowed[allowed.index(level) + 1], include_higher_levels=True
+            ):
+                self.logger.info("Extension locked at a higher level, cannot toggle status")
+                return False
+
+        complete_page_config = get_static_page_config(
+            app_settings_dir=app_settings_dir, logger=self.logger, level="all"
+        )
+
+        level_page_config = get_static_page_config(
+            app_settings_dir=app_settings_dir, logger=self.logger, level=level
+        )
+
+        disabled = complete_page_config.get("disabledExtensions", {})
+        disabled_at_level = level_page_config.get("disabledExtensions", {})
+        did_something = False
+        is_disabled = disabled.get(extension, False)
+
+        if value and not is_disabled:
+            disabled_at_level[extension] = True
+            did_something = True
+        elif not value and is_disabled:
+            disabled_at_level[extension] = False
+            did_something = True
+
+        if did_something:
+            level_page_config["disabledExtensions"] = disabled_at_level
+            write_page_config(level_page_config, level=level)
+        return did_something
+
+    def _maybe_mirror_disabled_in_locked(self, level="sys_prefix"):
+        """Lock all extensions that were previously disabled.
+
+        This exists to facilitate migration from 4.0 (which did not include lock
+        function) to 4.1 which exposes the plugin management to users in UI.
+
+        Returns `True` if migration happened, `False` otherwise.
+        """
+        app_settings_dir = osp.join(self.app_dir, "settings")
+
+        page_config = get_static_page_config(
+            app_settings_dir=app_settings_dir, logger=self.logger, level=level
+        )
+        if "lockedExtensions" in page_config:
+            # short-circuit if migration already happened
+            return False
+
+        # copy disabled onto lockedExtensions, ensuring the mapping format
+        disabled = page_config.get("disabledExtensions", {})
+        if isinstance(disabled, list):
+            disabled = {extension: True for extension in disabled}
+        page_config["lockedExtensions"] = disabled
+        write_page_config(page_config, level=level)
+        return True
+
+    def toggle_extension_lock(self, extension, value, level="sys_prefix"):
+        """Lock or unlock a lab extension (/plugin)."""
+        app_settings_dir = osp.join(self.app_dir, "settings")
+
+        # The highest level at which an extension can be locked is system,
+        # so we do not need to check levels above that one.
+        if level != "system":
+            allowed = get_allowed_levels()
+            if self._is_extension_locked(
+                extension, level=allowed[allowed.index(level) + 1], include_higher_levels=True
+            ):
+                self.logger.info("Extension locked at a higher level, cannot toggle")
+                return False
+
         page_config = get_static_page_config(
             app_settings_dir=app_settings_dir, logger=self.logger, level=level
         )
 
-        disabled = page_config.get("disabledExtensions", {})
-        did_something = False
-        is_disabled = disabled.get(extension, False)
-        if value and not is_disabled:
-            disabled[extension] = True
-            did_something = True
-        elif not value and is_disabled:
-            disabled[extension] = False
-            did_something = True
-
-        if did_something:
-            page_config["disabledExtensions"] = disabled
-            write_page_config(page_config, level=level)
-        return did_something
+        locked = page_config.get("lockedExtensions", {})
+        locked[extension] = value
+        page_config["lockedExtensions"] = locked
+        write_page_config(page_config, level=level)
 
     def check_extension(self, extension, check_installed_only=False):
         """Check if a lab extension is enabled or disabled"""
@@ -1197,6 +1313,11 @@ class _AppHandler:
             disabled = {extension: True for extension in disabled}
 
         info["disabled"] = disabled
+
+        locked = page_config.get("lockedExtensions", {})
+        if isinstance(locked, list):
+            locked = {extension: True for extension in locked}
+        info["locked"] = locked
 
         disabled_core = []
         for key in info["core_extensions"]:
@@ -1342,15 +1463,7 @@ class _AppHandler:
         # copy known-good yarn.lock if missing
         lock_path = pjoin(staging, "yarn.lock")
         lock_template = pjoin(HERE, "staging", "yarn.lock")
-        if (
-            self.registry != YARN_DEFAULT_REGISTRY
-        ):  # Replace on the fly the yarn repository see #3658
-            with open(lock_template, encoding="utf-8") as f:
-                template = f.read()
-            template = template.replace(YARN_DEFAULT_REGISTRY, self.registry.strip("/"))
-            with open(lock_path, "w", encoding="utf-8") as f:
-                f.write(template)
-        elif not osp.exists(lock_path):
+        if not osp.exists(lock_path):
             shutil.copy(lock_template, lock_path)
             os.chmod(lock_path, stat.S_IWRITE | stat.S_IREAD)
 
@@ -1601,17 +1714,8 @@ class _AppHandler:
             data = info["extensions"][name]
             version = data["version"]
             errors = info["compat_errors"][name]
-            extra = ""
-            if _is_disabled(name, info["disabled"]):
-                extra += " %s" % RED_DISABLED
-            else:
-                extra += " %s" % GREEN_ENABLED
-            if errors:
-                extra += " %s" % RED_X
-            else:
-                extra += " %s" % GREEN_OK
-            if data["is_local"]:
-                extra += "*"
+            extra = self._compose_extra_status(name, info, data, errors)
+
             # If we have the package name in the data, this means this extension's name is the alias name
             alias_package_source = data["alias_package_source"]
             if alias_package_source:
@@ -1622,7 +1726,7 @@ class _AppHandler:
                 error_accumulator[name] = (version, errors)
 
         # Write all errors at end:
-        _log_multiple_compat_errors(logger, error_accumulator)
+        _log_multiple_compat_errors(logger, error_accumulator, self.verbose)
 
         # Write a blank line separator
         logger.info("")
@@ -1648,17 +1752,7 @@ class _AppHandler:
                     continue
                 version = data["version"]
                 errors = info["compat_errors"][name]
-                extra = ""
-                if _is_disabled(name, info["disabled"]):
-                    extra += " %s" % RED_DISABLED
-                else:
-                    extra += " %s" % GREEN_ENABLED
-                if errors:
-                    extra += " %s" % RED_X
-                else:
-                    extra += " %s" % GREEN_OK
-                if data["is_local"]:
-                    extra += "*"
+                extra = self._compose_extra_status(name, info, data, errors)
 
                 install = data.get("install")
                 if install:
@@ -1670,7 +1764,27 @@ class _AppHandler:
             logger.info("")
 
         # Write all errors at end:
-        _log_multiple_compat_errors(logger, error_accumulator)
+        _log_multiple_compat_errors(logger, error_accumulator, self.verbose)
+
+    def _compose_extra_status(self, name: str, info: dict, data: dict, errors) -> str:
+        extra = ""
+        if _is_disabled(name, info["disabled"]):
+            extra += " %s" % RED_DISABLED
+        else:
+            extra += " %s" % GREEN_ENABLED
+        if errors:
+            extra += " %s" % RED_X
+        else:
+            extra += " %s" % GREEN_OK
+        if data["is_local"]:
+            extra += "*"
+        lock_status = _is_locked(name, info["locked"])
+        if lock_status.entire_extension_locked:
+            extra += " 🔒 (all plugins locked)"
+        elif lock_status.locked_plugins:
+            plugin_list = ", ".join(sorted(lock_status.locked_plugins))
+            extra += " 🔒 (plugins: %s locked)" % plugin_list
+        return extra
 
     def _read_build_config(self):
         """Get the build config data for the app dir."""
@@ -1828,8 +1942,7 @@ class _AppHandler:
                 # skip deprecated versions
                 if "deprecated" in data:
                     self.logger.debug(
-                        "Disregarding compatible version of package as it is deprecated: %s@%s"
-                        % (name, version)
+                        f"Disregarding compatible version of package as it is deprecated: {name}@{version}"
                     )
                     continue
                 # Verify that the version is a valid extension.
@@ -1967,7 +2080,7 @@ def _node_check(logger):
     """Check for the existence of nodejs with the correct version."""
     node = which("node")
     try:
-        output = subprocess.check_output([node, "node-version-check.js"], cwd=HERE)
+        output = subprocess.check_output([node, "node-version-check.js"], cwd=HERE)  # noqa S603
         logger.debug(output.decode("utf-8"))
     except Exception:
         data = CoreConfig()._data
@@ -1995,7 +2108,9 @@ def _yarn_config(logger):
 
     try:
         output_binary = subprocess.check_output(
-            [node, YARN_PATH, "config", "--json"], stderr=subprocess.PIPE, cwd=HERE
+            [node, YARN_PATH, "config", "--json"],  # noqa S603
+            stderr=subprocess.PIPE,
+            cwd=HERE,
         )
         output = output_binary.decode("utf-8")
         lines = iter(output.splitlines())
@@ -2284,6 +2399,33 @@ def _is_disabled(name, disabled=None):
     return False
 
 
+@dataclass(frozen=True)
+class LockStatus:
+    entire_extension_locked: bool
+    # locked plugins are only given if extension is not locked as a whole
+    locked_plugins: Optional[FrozenSet[str]] = None
+
+
+def _is_locked(name, locked=None) -> LockStatus:
+    """Test whether the package is locked.
+
+    If only a subset of extension plugins is locked return them.
+    """
+    locked = locked or {}
+    locked_plugins = set()
+    for lock, value in locked.items():
+        # skip packages explicitly marked as not locked
+        if value is False:
+            continue
+        if name == lock:
+            return LockStatus(entire_extension_locked=True)
+        extension_part = lock.partition(":")[0]
+        if name == extension_part:
+            locked_plugins.add(lock)
+
+    return LockStatus(entire_extension_locked=False, locked_plugins=locked_plugins)
+
+
 def _format_compatibility_errors(name, version, errors):
     """Format a message for compatibility errors."""
     msgs = []
@@ -2310,32 +2452,37 @@ def _format_compatibility_errors(name, version, errors):
     return msg
 
 
-def _log_multiple_compat_errors(logger, errors_map):
+def _log_multiple_compat_errors(logger, errors_map, verbose: bool):
     """Log compatibility errors for multiple extensions at once"""
 
     outdated = []
-    others = []
 
     for name, (_, errors) in errors_map.items():
         age = _compat_error_age(errors)
         if age > 0:
             outdated.append(name)
-        else:
-            others.append(name)
 
     if outdated:
         logger.warning(
             "\n        ".join(
-                ["\n   The following extensions are outdated:", *outdated]
-                + [
-                    '\n   Consider running "jupyter labextension update --all" '
-                    "to check for updates.\n"
+                [
+                    "\n   The following extensions may be outdated or specify dependencies that are incompatible with the current version of jupyterlab:",
+                    *outdated,
+                    "\n   If you are a user, check if an update is available for these packages.\n"
+                    + (
+                        "   If you are a developer, re-run with `--verbose` flag for more details.\n"
+                        if not verbose
+                        else "   See below for the details.\n"
+                    ),
                 ]
             )
         )
 
-    for name in others:
-        version, errors = errors_map[name]
+    # Print out compatibility errors for all extensions, even the ones inferred
+    # to be possibly outdated, to guide developers upgrading their extensions.
+    for name, (version, errors) in errors_map.items():
+        if name in outdated and not verbose:
+            continue
         msg = _format_compatibility_errors(name, version, errors)
         logger.warning(f"{msg}\n")
 
@@ -2434,7 +2581,7 @@ def _semver_key(version, prerelease_first=False):
 
 def _fetch_package_metadata(registry, name, logger):
     """Fetch the metadata for a package from the npm registry"""
-    req = Request(
+    req = Request(  # noqa S310
         urljoin(registry, quote(name, safe="@")),
         headers={
             "Accept": ("application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*")

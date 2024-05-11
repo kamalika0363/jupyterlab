@@ -3,7 +3,7 @@
 
 import type { Notification } from '@jupyterlab/apputils';
 import type { ISettingRegistry } from '@jupyterlab/settingregistry';
-import type { ElementHandle, Page, Response } from '@playwright/test';
+import type { ElementHandle, Locator, Page, Response } from '@playwright/test';
 import { ContentsHelper } from './contents';
 import type { IPluginNameToInterfaceMap } from './extension';
 import {
@@ -93,7 +93,14 @@ export interface IJupyterLabPage {
   readonly theme: ThemeHelper;
 
   /**
+   * JupyterLab launcher tab
+   */
+  readonly launcher: Locator;
+
+  /**
    * Selector for launcher tab
+   *
+   * @deprecated You should use locator selector {@link launcher}
    */
   readonly launcherSelector: string;
 
@@ -220,12 +227,16 @@ export interface IJupyterLabPage {
    *
    * @param element Element or selector to watch
    */
-  waitForTransition(element: ElementHandle<Element> | string): Promise<void>;
+  waitForTransition(
+    element: ElementHandle<Element> | Locator | string
+  ): Promise<void>;
 
   /**
    * Factory for active activity tab xpath
    *
    * @returns The selector
+   *
+   * @deprecated You should use locator selector `getByRole('main').locator('.jp-mod-current[role="tab"]')`
    */
   xpBuildActiveActivityTabSelector(): string;
 
@@ -233,6 +244,9 @@ export interface IJupyterLabPage {
    * Factory for activity panel xpath by id
    * @param id Panel id
    * @returns The selector
+   *
+   * @deprecated You should use locator selector `getByRole('main').getByRole('tabpanel', { name })`
+   *   where `name` is the name of the tab.
    */
   xpBuildActivityPanelSelector(id: string): string;
 
@@ -241,6 +255,8 @@ export interface IJupyterLabPage {
    *
    * @param name Activity name
    * @returns The selector
+   *
+   * @deprecated You should use locator selector `getByRole('main').getByRole('tab', { name })`
    */
   xpBuildActivityTabSelector(name: string): string;
 
@@ -249,6 +265,8 @@ export interface IJupyterLabPage {
    *
    * @param className Class name
    * @returns The selector
+   *
+   * @deprecated You should use locator CSS selector `locator('.className')`
    */
   xpContainsClass(className: string): string;
 }
@@ -366,7 +384,16 @@ export class JupyterLabPage implements IJupyterLabPage {
   readonly debugger: DebuggerHelper;
 
   /**
+   * JupyterLab launcher tab
+   */
+  get launcher(): Locator {
+    return this.activity.launcher;
+  }
+
+  /**
    * Selector for launcher tab
+   *
+   * @deprecated You should use locator selector {@link launcher}
    */
   get launcherSelector(): string {
     return this.activity.launcherSelector;
@@ -480,14 +507,9 @@ export class JupyterLabPage implements IJupyterLabPage {
   /**
    * Whether JupyterLab is in simple mode or not
    */
-  isInSimpleMode = async (): Promise<boolean> => {
-    const toggle = await this.page.$(
-      '#jp-single-document-mode button.jp-switch'
-    );
-    const checked = (await toggle?.getAttribute('aria-checked')) === 'true';
-
-    return checked;
-  };
+  isInSimpleMode(): Promise<boolean> {
+    return Utils.isInSimpleMode(this.page);
+  }
 
   /**
    * Returns the main resource response. In case of multiple redirects, the navigation will resolve with the response of the
@@ -579,7 +601,7 @@ export class JupyterLabPage implements IJupyterLabPage {
    * @returns Whether this operation succeeds or not
    */
   async setSimpleMode(simple: boolean): Promise<boolean> {
-    const toggle = await this.page.$(
+    const toggle = this.page.locator(
       '#jp-single-document-mode button.jp-switch'
     );
     if (toggle) {
@@ -620,13 +642,15 @@ export class JupyterLabPage implements IJupyterLabPage {
    * @param element Element or selector to watch
    */
   async waitForTransition(
-    element: ElementHandle<Element> | string
+    element: ElementHandle<Element> | Locator | string
   ): Promise<void> {
     return Utils.waitForTransition(this.page, element);
   }
 
   /**
    * Factory for active activity tab xpath
+   *
+   * @deprecated You should use locator selector `getByRole('main').locator('.jp-mod-current[role="tab"]')`
    */
   xpBuildActiveActivityTabSelector(): string {
     return Utils.xpBuildActiveActivityTabSelector();
@@ -635,6 +659,9 @@ export class JupyterLabPage implements IJupyterLabPage {
   /**
    * Factory for activity panel xpath by id
    * @param id Panel id
+   *
+   * @deprecated You should use locator selector `getByRole('main').getByRole('tabpanel', { name })`
+   *   where `name` is the name of the tab.
    */
   xpBuildActivityPanelSelector(id: string): string {
     return Utils.xpBuildActivityPanelSelector(id);
@@ -643,6 +670,8 @@ export class JupyterLabPage implements IJupyterLabPage {
   /**
    * Factory for activity tab xpath by name
    * @param name Activity name
+   *
+   * @deprecated You should use locator selector `getByRole('main').getByRole('tab', { name })`
    */
   xpBuildActivityTabSelector(name: string): string {
     return Utils.xpBuildActivityTabSelector(name);
@@ -651,6 +680,8 @@ export class JupyterLabPage implements IJupyterLabPage {
   /**
    * Factory for element containing a given class xpath
    * @param className Class name
+   *
+   * @deprecated You should use locator CSS selector `locator('.className')`
    */
   xpContainsClass(className: string): string {
     return Utils.xpContainsClass(className);
